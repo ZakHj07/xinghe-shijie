@@ -1,8 +1,16 @@
 # 星河视界 · Gesture Universe
 
+**▶ 在线体验：[cute-croquembouche-ce36b4.netlify.app](https://cute-croquembouche-ce36b4.netlify.app)** ・ [GitHub 仓库](https://github.com/ZakHj07/xinghe-shijie)
+
 一个用鼠标 / 摄像头手势漫游的三维宇宙场景：**粒子银河系 → 太阳系 → 地球 → 回到银河系**。
 
 全部用 Three.js（r170）+ MediaPipe Hand Landmarker 手写实现，无构建步骤，双击 `start.bat` 即可打开。
+
+[![粒子银河系](docs/galaxy.jpg)](https://cute-croquembouche-ce36b4.netlify.app)
+
+<img src="docs/solar.jpg" width="49.6%" alt="太阳系"> <img src="docs/earth.jpg" width="49.6%" alt="地球">
+
+> 张开手掌放大推进 → 穿过猎户臂进入太阳系 → 俯冲地球；握拳缩小，一路退回银河。全程可用手势或鼠标 / 滚轮。
 
 ---
 
