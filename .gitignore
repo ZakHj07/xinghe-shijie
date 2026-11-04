@@ -1,0 +1,16 @@
+# 浏览器调试残留（几百 MB，绝对不要提交）
+.edgeprofile/
+
+# 打包产物（可由 share.bat 重新生成）
+dist/
+*.zip
+
+# 自动化截图与临时文件
+shots/
+tmp_prev/
+ref_earth.*
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+node_modules/

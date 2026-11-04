@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>星河视界 · 手势宇宙漫游</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2306101f'/%3E%3Ccircle cx='32' cy='32' r='9' fill='%23ffe3b0'/%3E%3Cellipse cx='32' cy='32' rx='24' ry='9' fill='none' stroke='%238fc0ff' stroke-width='3' transform='rotate(-24 32 32)'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="labels"></div>
+<div id="vignette"></div>
+
+<!-- 左上角品牌 -->
+<div class="brand">
+  <div class="brand-mark"></div>
+  <div class="brand-text">
+    <h1>星河视界</h1>
+    <p>GESTURE&nbsp;UNIVERSE&nbsp;·&nbsp;手势宇宙漫游</p>
+  </div>
+</div>
+
+<!-- 左侧信息面板 -->
+<aside id="hud" class="hud">
+  <div class="hud-head">
+    <span class="hud-dot"></span>
+    <span id="hud-tag">DEEP SPACE / 银河系</span>
+  </div>
+  <h2 id="hud-title">银河系</h2>
+  <p id="hud-subtitle">Milky Way · 棒旋星系</p>
+  <div class="hud-rule"></div>
+  <div id="hud-rows" class="hud-rows"></div>
+  <div class="hud-rule"></div>
+  <div id="hud-note" class="hud-note"></div>
+</aside>
+
+<!-- 底部手势提示 + 缩放能量条 -->
+<div id="gesture-bar" class="gesture-bar">
+  <div class="gesture-icon">✋</div>
+  <div class="gesture-copy">
+    <span id="gesture-text">张开手掌 / 双指张开 = 放大推进</span>
+    <span id="gesture-sub">握拳 = 缩小 · 左右上下移动手掌 = 转动视角</span>
+  </div>
+  <div class="zoom-meter"><div id="zoom-fill"></div></div>
+</div>
+
+<!-- 右上角摄像头 -->
+<div id="cam-panel" class="cam-panel">
+  <div class="cam-frame">
+    <video id="cam" autoplay muted playsinline></video>
+    <canvas id="cam-overlay"></canvas>
+    <div class="cam-scan"></div>
+    <div id="cam-status" class="cam-status">等待授权</div>
+  </div>
+  <div class="cam-label"><span id="cam-dot" class="cam-dot"></span><span id="cam-mode">摄像头未连接 · 可用鼠标/滚轮</span></div>
+</div>
+
+<!-- 场景切换（可点击） -->
+<nav id="scene-nav" class="scene-nav" aria-label="场景切换">
+  <button type="button" class="nav-btn is-active" data-scene="galaxy" aria-current="true">
+    <span class="nav-idx">01</span><span class="nav-cn">银河系</span><span class="nav-en">MILKY WAY</span>
+  </button>
+  <button type="button" class="nav-btn" data-scene="solar">
+    <span class="nav-idx">02</span><span class="nav-cn">太阳系</span><span class="nav-en">SOLAR SYSTEM</span>
+  </button>
+  <button type="button" class="nav-btn" data-scene="earth">
+    <span class="nav-idx">03</span><span class="nav-cn">地球</span><span class="nav-en">EARTH</span>
+  </button>
+</nav>
+
+<!-- 背景音乐开关 -->
+<button id="audio-btn" class="audio-btn" aria-pressed="true" aria-label="背景音乐开关" title="背景音乐：开">
+  <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+</button>
+
+<!-- 全屏开关 -->
+<button id="fs-btn" class="audio-btn fs-btn" aria-pressed="false" aria-label="全屏显示" title="全屏显示（F）">
+  <svg class="fs-icon fs-enter" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 9V4.6h4.4M20 9V4.6h-4.4M4 15v4.4h4.4M20 15v4.4h-4.4" />
+  </svg>
+  <svg class="fs-icon fs-exit" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M9 4.6v4.4H4.6M15 4.6v4.4h4.4M9 19.4V15H4.6M15 19.4V15h4.4" />
+  </svg>
+</button>
+
+<!-- 载入层 -->
+<div id="loader" class="loader">
+  <div class="loader-bg">
+    <div class="nebula nebula-a"></div>
+    <div class="nebula nebula-b"></div>
+    <div class="nebula-pulse"></div>
+    <canvas id="loader-dust"></canvas>
+    <div class="loader-veil"></div>
+  </div>
+  <div class="loader-inner">
+    <div class="loader-ring"></div>
+    <h2>正在构筑星海</h2>
+    <p id="load-status">加载资源 0%</p>
+    <div class="loader-track"><div id="load-fill"></div></div>
+    <button id="enter-btn" class="enter-btn" disabled>进入宇宙</button>
+    <p class="loader-tip">进入后请允许摄像头权限，用真实手势漫游；无摄像头时可用鼠标拖拽 + 滚轮</p>
+  </div>
+</div>
+
+<div id="warp-label" class="warp-label"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,270 @@
+:root{
+  --cyan:#5fe6ff;
+  --cyan-dim:rgba(95,230,255,.35);
+  --violet:#9d8cff;
+  --gold:#ffc978;
+  --ink:rgba(6,10,20,.55);
+  --line:rgba(120,200,255,.18);
+  --text:#dfefff;
+  --muted:rgba(190,215,240,.62);
+  --font:"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;margin:0;background:#02030a;overflow:hidden;font-family:var(--font);color:var(--text);}
+body{cursor:crosshair;}
+canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block;}
+
+#vignette{
+  position:fixed;inset:0;pointer-events:none;z-index:2;
+  background:
+    radial-gradient(120% 90% at 50% 50%, rgba(0,0,0,0) 38%, rgba(0,2,8,.55) 78%, rgba(0,1,6,.92) 100%),
+    linear-gradient(90deg, rgba(2,4,12,.72) 0%, rgba(2,4,12,0) 26%);
+}
+
+/* ---------- brand ---------- */
+.brand{position:fixed;top:26px;left:32px;z-index:6;display:flex;gap:14px;align-items:center;pointer-events:none;}
+.brand-mark{
+  width:34px;height:34px;border-radius:50%;
+  background:radial-gradient(circle at 35% 32%,#fff,#7fe8ff 30%,#3a7bff 62%,rgba(58,123,255,0) 74%);
+  box-shadow:0 0 22px rgba(95,230,255,.55),0 0 54px rgba(58,123,255,.35);
+  animation:breathe 4.5s ease-in-out infinite;
+}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.1);opacity:1}}
+.brand h1{margin:0;font-size:19px;font-weight:600;letter-spacing:.24em;}
+.brand p{margin:5px 0 0;font-size:9.5px;letter-spacing:.3em;color:var(--muted);}
+
+/* ---------- HUD ---------- */
+.hud{
+  position:fixed;left:32px;top:104px;width:318px;z-index:6;
+  padding:20px 22px 18px;
+  background:linear-gradient(150deg,rgba(10,22,40,.62),rgba(4,8,18,.48));
+  border:1px solid var(--line);
+  border-left:2px solid rgba(95,230,255,.55);
+  border-radius:3px 14px 14px 3px;
+  backdrop-filter:blur(14px) saturate(1.2);
+  -webkit-backdrop-filter:blur(14px) saturate(1.2);
+  box-shadow:0 24px 70px rgba(0,0,0,.55),inset 0 1px 0 rgba(160,220,255,.1);
+  transition:opacity .45s ease,transform .45s cubic-bezier(.2,.8,.2,1);
+}
+.hud.out{opacity:0;transform:translateX(-16px);}
+.hud-head{display:flex;align-items:center;gap:8px;font-size:9.5px;letter-spacing:.24em;color:var(--cyan);opacity:.85;}
+.hud-dot{width:6px;height:6px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan);animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+.hud h2{margin:12px 0 4px;font-size:27px;font-weight:600;letter-spacing:.08em;text-shadow:0 0 26px rgba(95,230,255,.35);}
+.hud-subtitle{margin:0;font-size:10.5px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;}
+.hud-rule{height:1px;margin:16px 0 14px;background:linear-gradient(90deg,var(--cyan-dim),rgba(120,200,255,.04));}
+.hud-rows{display:flex;flex-direction:column;gap:11px;}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:12px;line-height:1.5;
+  animation:rowIn .5s both;}
+@keyframes rowIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.row .k{color:var(--muted);letter-spacing:.06em;white-space:nowrap;}
+.row .v{color:#eaf7ff;font-weight:500;text-align:right;letter-spacing:.02em;}
+.row .v em{font-style:normal;color:var(--cyan);font-size:10px;margin-left:3px;opacity:.85;}
+.hud-note{font-size:10.5px;line-height:1.85;color:rgba(175,205,235,.55);letter-spacing:.04em;}
+
+/* ---------- gesture bar ---------- */
+.gesture-bar{
+  position:fixed;left:32px;bottom:30px;z-index:6;display:flex;align-items:center;gap:14px;
+  padding:12px 18px 12px 14px;border-radius:40px;
+  background:linear-gradient(90deg,rgba(10,22,40,.62),rgba(6,12,24,.32));
+  border:1px solid var(--line);backdrop-filter:blur(12px);
+  box-shadow:0 12px 40px rgba(0,0,0,.45);
+  transition:opacity .4s ease;
+}
+.gesture-icon{font-size:20px;filter:drop-shadow(0 0 10px rgba(95,230,255,.6));animation:wave 3.6s ease-in-out infinite;}
+@keyframes wave{0%,100%{transform:rotate(-6deg)}50%{transform:rotate(8deg)}}
+.gesture-copy{display:flex;flex-direction:column;gap:3px;}
+#gesture-text{font-size:12px;letter-spacing:.05em;}
+#gesture-sub{font-size:9.5px;letter-spacing:.08em;color:var(--muted);}
+.zoom-meter{width:86px;height:4px;border-radius:3px;background:rgba(120,200,255,.14);overflow:hidden;margin-left:6px;}
+#zoom-fill{height:100%;width:0%;border-radius:3px;background:linear-gradient(90deg,#3a7bff,#5fe6ff,#d8f8ff);box-shadow:0 0 12px rgba(95,230,255,.7);transition:width .12s linear;}
+
+/* ---------- camera ---------- */
+.cam-panel{position:fixed;right:28px;top:26px;z-index:7;width:232px;}
+.cam-frame{position:relative;width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;
+  border:1px solid rgba(120,200,255,.28);background:#04070f;
+  box-shadow:0 16px 46px rgba(0,0,0,.6),0 0 0 1px rgba(0,0,0,.4),inset 0 0 40px rgba(20,60,110,.35);}
+#cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:block;filter:saturate(.85) contrast(1.06) brightness(.92);}
+#cam-overlay{position:absolute;inset:0;width:100%;height:100%;transform:scaleX(-1);pointer-events:none;}
+.cam-scan{position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(120,200,255,.05) 0 1px,transparent 1px 3px),
+             radial-gradient(90% 70% at 50% 45%,transparent 55%,rgba(2,6,14,.75) 100%);}
+.cam-scan::after{content:"";position:absolute;left:0;right:0;height:22%;top:-22%;
+  background:linear-gradient(180deg,transparent,rgba(95,230,255,.16),transparent);animation:scan 4.2s linear infinite;}
+@keyframes scan{0%{top:-22%}100%{top:100%}}
+.cam-status{position:absolute;left:8px;bottom:8px;font-size:9.5px;letter-spacing:.16em;
+  padding:3px 8px;border-radius:20px;background:rgba(3,8,16,.66);border:1px solid rgba(120,200,255,.24);color:var(--cyan);}
+.cam-label{margin-top:8px;display:flex;align-items:center;gap:7px;font-size:9.5px;letter-spacing:.1em;color:var(--muted);}
+.cam-dot{width:6px;height:6px;border-radius:50%;background:#54657a;flex:none;}
+.cam-dot.live{background:#3ef2a0;box-shadow:0 0 10px #3ef2a0;animation:pulse 1.6s infinite;}
+.cam-dot.err{background:#ff6b6b;box-shadow:0 0 10px #ff6b6b;}
+
+/* ---------- scene nav ---------- */
+.scene-nav{position:fixed;left:32px;bottom:104px;z-index:7;display:flex;align-items:stretch;gap:4px;
+  padding:5px;border-radius:999px;
+  background:linear-gradient(90deg,rgba(9,20,38,.66),rgba(6,12,24,.34));
+  border:1px solid var(--line);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:0 10px 34px rgba(0,0,0,.45),inset 0 1px 0 rgba(190,225,255,.06);}
+.nav-btn{position:relative;display:grid;grid-template-columns:auto auto;grid-template-rows:auto auto;
+  column-gap:9px;row-gap:1px;align-items:center;
+  padding:8px 18px 8px 13px;border:1px solid transparent;border-radius:999px;
+  background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+  transition:background .3s,border-color .3s,box-shadow .3s,transform .18s;}
+.nav-idx{grid-row:1 / span 2;font-size:9px;letter-spacing:.08em;color:rgba(120,175,225,.48);
+  font-variant-numeric:tabular-nums;transition:color .3s;}
+.nav-cn{font-size:12.5px;line-height:1.15;letter-spacing:.16em;color:rgba(196,222,248,.74);
+  transition:color .3s,text-shadow .3s;}
+.nav-en{font-size:7.5px;line-height:1.1;letter-spacing:.2em;color:rgba(140,180,225,.42);transition:color .3s;}
+.nav-btn:hover{background:rgba(30,62,104,.30);border-color:rgba(120,200,255,.20);}
+.nav-btn:hover .nav-cn{color:rgba(228,244,255,.96);}
+.nav-btn:active{transform:scale(.97);}
+.nav-btn:focus-visible{outline:1px solid rgba(120,220,255,.75);outline-offset:2px;}
+.nav-btn.is-active{background:linear-gradient(135deg,rgba(46,120,190,.42),rgba(18,54,100,.18));
+  border-color:rgba(120,220,255,.42);
+  box-shadow:0 0 0 1px rgba(120,220,255,.08),0 6px 22px rgba(20,90,160,.34),
+    inset 0 1px 0 rgba(210,240,255,.16);}
+.nav-btn.is-active .nav-cn{color:#eaf8ff;text-shadow:0 0 14px rgba(95,230,255,.55);}
+.nav-btn.is-active .nav-en{color:rgba(162,212,246,.72);}
+.nav-btn.is-active .nav-idx{color:var(--cyan);}
+.nav-btn.is-active::after{content:'';position:absolute;left:50%;bottom:2px;width:16px;height:1.5px;
+  transform:translateX(-50%);border-radius:2px;
+  background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+  box-shadow:0 0 10px rgba(95,230,255,.85);}
+/* 转场进行中：按钮变暗且不可点，避免连点把动画叠起来 */
+body.is-busy .scene-nav{opacity:.55;pointer-events:none;}
+
+/* ---------- 背景音乐开关 ---------- */
+.audio-btn{position:fixed;right:36px;bottom:58px;z-index:7;width:42px;height:42px;
+  display:flex;align-items:flex-end;justify-content:center;gap:3px;padding:0 0 12px;
+  border-radius:50%;cursor:pointer;
+  background:rgba(10,22,42,.5);border:1px solid rgba(120,190,255,.22);
+  box-shadow:0 0 0 rgba(95,230,255,0),inset 0 1px 0 rgba(200,230,255,.08);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  transition:border-color .3s,box-shadow .3s,background .3s,transform .2s;}
+.audio-btn:hover{border-color:rgba(140,220,255,.45);background:rgba(16,34,62,.62);transform:translateY(-1px);}
+.audio-btn .bar{display:block;width:3px;border-radius:2px;background:linear-gradient(180deg,#9fe8ff,#4aa8ff);
+  box-shadow:0 0 8px rgba(95,230,255,.55);animation:eq 1.15s ease-in-out infinite;}
+.audio-btn .bar:nth-child(1){height:7px;animation-delay:-.2s;}
+.audio-btn .bar:nth-child(2){height:13px;animation-delay:-.62s;}
+.audio-btn .bar:nth-child(3){height:9px;animation-delay:-.95s;}
+@keyframes eq{0%,100%{transform:scaleY(.55)}50%{transform:scaleY(1.5)}}
+.audio-btn.is-muted{background:rgba(10,22,42,.36);border-color:rgba(120,190,255,.14);}
+.audio-btn.is-muted .bar{animation:none;transform:scaleY(.4);background:rgba(150,185,220,.4);box-shadow:none;}
+@media (max-width:720px){.audio-btn{right:20px;bottom:52px;}}
+
+/* ---------- 全屏开关（叠在音乐按钮上方） ---------- */
+.fs-btn{right:36px;bottom:110px;padding:0;align-items:center;justify-content:center;}
+.fs-btn svg{width:19px;height:19px;fill:none;
+  stroke:rgba(205,232,255,.9);stroke-width:1.85;
+  stroke-linecap:round;stroke-linejoin:round;
+  filter:drop-shadow(0 0 6px rgba(95,230,255,.45));
+  transition:stroke .3s,transform .25s,filter .3s;}
+.fs-btn:hover svg{stroke:#eaf7ff;transform:scale(1.07);filter:drop-shadow(0 0 9px rgba(120,236,255,.7));}
+.fs-btn .fs-exit{display:none;}
+.fs-btn.is-full{background:rgba(18,40,72,.62);border-color:rgba(140,220,255,.42);}
+.fs-btn.is-full .fs-enter{display:none;}
+.fs-btn.is-full .fs-exit{display:block;}
+@media (max-width:720px){.fs-btn{right:20px;bottom:104px;}}
+
+/* ---------- loader ---------- */
+.loader{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(80% 60% at 50% 45%,#061024 0%,#02040c 65%,#000 100%);
+  transition:opacity .9s ease,visibility .9s;overflow:hidden;}
+.loader.hide{opacity:0;visibility:hidden;}
+
+/* ---------- 加载页背景：JWST 船底座「宇宙悬崖」三层缓慢运动 ---------- */
+.loader-bg{position:absolute;inset:0;overflow:hidden;pointer-events:none;}
+.nebula{position:absolute;inset:-12%;background-image:url('../assets/textures/carina_nebula_large.jpg');
+  background-position:50% 44%;background-size:cover;background-repeat:no-repeat;
+  will-change:transform,opacity;}
+.nebula-a{filter:saturate(1.08) contrast(1.05) brightness(.90);
+  animation:nebulaDrift 44s ease-in-out infinite alternate;}
+.nebula-b{filter:blur(30px) saturate(1.45) brightness(.62);mix-blend-mode:screen;opacity:.34;
+  animation:nebulaDriftSlow 68s ease-in-out infinite alternate;}
+/* 第四层：一团会呼吸的暖光，让星云局部像有能量在流动 */
+.nebula-pulse{position:absolute;inset:-20%;mix-blend-mode:screen;pointer-events:none;
+  background:radial-gradient(38% 34% at 38% 58%,rgba(255,168,86,.20) 0%,rgba(255,120,60,.06) 42%,rgba(0,0,0,0) 72%);
+  animation:nebulaPulse 19s ease-in-out infinite alternate;}
+@keyframes nebulaDrift{
+  0%{transform:scale(1.03) translate3d(-1.2%,1.0%,0) rotate(-.4deg);}
+  50%{transform:scale(1.09) translate3d(.6%,-.6%,0) rotate(.15deg);}
+  100%{transform:scale(1.15) translate3d(1.8%,-2.0%,0) rotate(.5deg);}
+}
+@keyframes nebulaDriftSlow{
+  0%{transform:scale(1.24) translate3d(2.6%,-2.2%,0);opacity:.26;}
+  100%{transform:scale(1.02) translate3d(-2.4%,2.8%,0);opacity:.46;}
+}
+@keyframes nebulaPulse{
+  0%{opacity:.35;transform:scale(1.0) translate3d(-1.5%,1.5%,0);}
+  100%{opacity:.75;transform:scale(1.12) translate3d(2.0%,-1.0%,0);}
+}
+#loader-dust{position:absolute;inset:0;width:100%;height:100%;}
+.loader-veil{position:absolute;inset:0;
+  background:
+    radial-gradient(78% 68% at 50% 48%,rgba(2,5,12,0) 0%,rgba(2,5,12,.10) 46%,rgba(1,3,9,.78) 88%,rgba(0,2,6,.95) 100%),
+    linear-gradient(180deg,rgba(2,5,12,.42),rgba(2,5,12,.04) 30%,rgba(1,3,8,.55) 78%,rgba(0,2,6,.92) 100%);}
+/* 文字区域压一层极淡的暗晕，保证可读性又不压暗整张星云 */
+.loader-inner::before{content:'';position:absolute;left:50%;top:46%;width:185%;height:210%;z-index:-1;
+  transform:translate(-50%,-50%);pointer-events:none;
+  background:radial-gradient(48% 50% at 50% 50%,rgba(2,5,12,.78) 0%,rgba(2,5,12,.46) 44%,rgba(2,5,12,0) 76%);}
+@media (prefers-reduced-motion:reduce){
+  .nebula-a,.nebula-b{animation:none;}
+}
+
+.loader-inner{width:min(420px,86vw);text-align:center;position:relative;z-index:2;}
+.loader-ring{width:64px;height:64px;margin:0 auto 26px;border-radius:50%;
+  border:1px solid rgba(95,230,255,.18);border-top-color:var(--cyan);border-right-color:rgba(157,140,255,.8);
+  animation:spin 1.15s linear infinite;box-shadow:0 0 36px rgba(95,230,255,.25);}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loader h2{margin:0 0 10px;font-size:22px;font-weight:500;letter-spacing:.3em;
+  text-shadow:0 2px 26px rgba(0,4,12,.95),0 0 60px rgba(0,4,12,.8);}
+#load-status{margin:0 0 18px;font-size:10.5px;letter-spacing:.24em;color:var(--muted);
+  text-shadow:0 1px 12px rgba(0,4,12,.95);}
+.loader-track{height:2px;border-radius:2px;background:rgba(120,200,255,.14);overflow:hidden;}
+#load-fill{height:100%;width:0%;background:linear-gradient(90deg,#3a7bff,#5fe6ff,#fff);transition:width .3s ease;box-shadow:0 0 14px rgba(95,230,255,.8);}
+.enter-btn{margin-top:30px;padding:13px 44px;font-family:var(--font);font-size:12.5px;letter-spacing:.36em;
+  color:#dff7ff;background:rgba(20,60,110,.28);border:1px solid rgba(95,230,255,.45);border-radius:2px;
+  cursor:pointer;transition:.3s;backdrop-filter:blur(6px);}
+.enter-btn:disabled{opacity:.3;cursor:not-allowed;}
+.enter-btn:not(:disabled):hover{background:rgba(95,230,255,.16);box-shadow:0 0 34px rgba(95,230,255,.4);letter-spacing:.42em;}
+.loader-tip{margin-top:20px;font-size:9.5px;line-height:1.9;letter-spacing:.1em;color:rgba(178,204,232,.62);
+  text-shadow:0 1px 14px rgba(0,4,12,.95);}
+
+/* ---------- warp label ---------- */
+.warp-label{position:fixed;left:50%;top:38%;transform:translate(-50%,-50%);z-index:9;
+  font-size:11px;letter-spacing:.5em;color:rgba(230,245,255,.85);opacity:0;pointer-events:none;
+  text-shadow:0 0 24px rgba(95,230,255,.8);transition:opacity .5s;}
+.warp-label.show{opacity:1;}
+
+@media (max-width:900px){
+  .hud{width:262px;left:16px;top:86px;padding:16px;}
+  .hud h2{font-size:22px;}
+  .brand{left:16px;top:16px;}
+  .cam-panel{right:12px;top:12px;width:150px;}
+  .gesture-bar{left:16px;bottom:14px;padding:9px 14px;}
+  .gesture-bar .zoom-meter{display:none;}
+  #gesture-sub{display:none;}
+  .scene-nav{display:none;}
+}
+
+/* ---------- 邻近星系名字标签 ---------- */
+#labels{position:fixed;inset:0;z-index:6;pointer-events:none;overflow:hidden;}
+.clabel{position:absolute;left:0;top:0;display:flex;flex-direction:column;align-items:center;
+  gap:3px;white-space:nowrap;opacity:0;will-change:transform,opacity;
+  transition:opacity .45s ease;}
+.clabel b{font-family:"Songti SC","Noto Serif SC",Georgia,"Times New Roman",serif;
+  font-weight:400;font-size:13px;line-height:1.28;letter-spacing:.36em;padding-left:.36em;
+  color:rgba(236,245,255,.96);
+  text-shadow:0 0 10px rgba(6,12,26,.95),0 0 22px rgba(90,150,255,.45),0 0 42px rgba(60,110,220,.28);}
+.clabel i{font-style:normal;font-size:8px;line-height:1.1;letter-spacing:.3em;padding-left:.3em;
+  color:rgba(190,216,248,.9);
+  text-shadow:0 0 8px rgba(4,9,20,.96),0 1px 4px rgba(4,9,20,.9);}
+.clabel::after{content:'';width:1px;height:16px;margin-top:2px;
+  background:linear-gradient(180deg,rgba(150,200,255,.55),rgba(150,200,255,0));}
+@media (max-width:760px){
+  .clabel b{font-size:10px;letter-spacing:.26em;}
+  .clabel i{font-size:7px;}
+}
