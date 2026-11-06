@@ -19,7 +19,7 @@ export function createEarth(pixelRatio, tex) {
   const skyPivot = new THREE.Group();
   scene.add(skyPivot);
 
-  const sunDir = new THREE.Vector3(0.94, 0.24, 0.24).normalize();
+  const sunDir = new THREE.Vector3(0.46, 0.20, 0.86).normalize();
 
   const surface = createEarthSurface({
     day: tex.earthDay,
@@ -90,13 +90,13 @@ export function createEarth(pixelRatio, tex) {
 
           // 冷调：靛蓝底 + 青蓝丝状云气。刻意压得很暗、很稀薄，
           // 把画面里最亮的位置留给地球，避免背景「抢戏」。
-          vec3 q1 = vec3(d.x * 2.6 + t * 0.9, d.y * 4.6, d.z * 2.6 - t * 0.6);
+          vec3 q1 = vec3(d.x * 7.5 + t * 0.9, d.y * 11.0, d.z * 7.5 - t * 0.6);
           float n1 = fbm5(q1);
-          vec3 q2 = vec3(d.x * 5.4 - t * 0.6, d.y * 9.5, d.z * 5.4 + t * 0.35);
+          vec3 q2 = vec3(d.x * 16.0 - t * 0.6, d.y * 24.0, d.z * 16.0 + t * 0.35);
           float n2 = fbm3(q2);
 
-          float fil = smoothstep(0.54, 0.99, n1 * 0.88 + n2 * 0.26);
-          float glow = pow(fil, 2.0);
+          float fil = smoothstep(0.54, 0.96, n1 * 0.78 + n2 * 0.42);
+          float glow = pow(fil, 2.2);
 
           // 银河带：把云气收在这一条上，其余留干净的深空，避免整片天空发灰发棕
           float band = smoothstep(0.02, 0.95, 1.0 - abs(d.y * 1.30 + 0.10 * sin(d.x * 2.0 + t * 0.5)));
@@ -108,9 +108,9 @@ export function createEarth(pixelRatio, tex) {
           vec3 cTeal = vec3(0.0035, 0.0290, 0.0430);
 
           vec3 col = cDeep;
-          col += cBlue * glow * (0.24 + 0.76 * bandCool) * 1.35;
-          col = mix(col, cCyan, smoothstep(0.66, 1.0, n2) * 0.30 * bandCool);
-          col += cTeal * pow(smoothstep(0.70, 1.0, n2 * 0.62 + n1 * 0.38), 2.0) * 0.40;
+          col += cBlue * (0.08 * glow + 0.022) * bandCool;
+          col = mix(col, cCyan, smoothstep(0.78, 1.0, n2) * 0.07 * bandCool);
+          col += cTeal * pow(smoothstep(0.76, 1.0, n2 * 0.55 + n1 * 0.45), 2.2) * 0.12 * bandCool;
 
           // 太阳那一侧的暖边：收到 14 次方，只在朝阳处留一条极窄的暖色，
           // 否则转过头整片天会变成一层土棕色
@@ -118,8 +118,8 @@ export function createEarth(pixelRatio, tex) {
           col += vec3(0.090, 0.064, 0.042) * sunAmt * 0.30;
 
           // 极细星尘
-          float sp = pow(fbm3(d * 52.0 + vec3(uTime * 0.015)), 6.0);
-          col += vec3(0.80, 0.90, 1.0) * sp * 0.34;
+          float sp = pow(fbm3(d * 120.0 + vec3(uTime * 0.015)), 8.0);
+          col += vec3(0.80, 0.90, 1.0) * sp * 0.030;
 
           col *= 0.60 + bandCool * 0.40;
           col *= 0.92;
@@ -132,60 +132,80 @@ export function createEarth(pixelRatio, tex) {
   sky.renderOrder = -10;
   skyPivot.add(sky);
 
-  // 近景星点（缓慢漂移，视差）
+  // 近景星点（三层，铺满全天 + 一条倾斜星带，随机闪烁、随视角视差转动）
   const stars = [];
-  for (let L = 0; L < 2; L++) {
-    const count = [1500, 900][L];
+  for (let L = 0; L < 3; L++) {
+    const count = [1500, 1100, 760][L];
     const pos = new Float32Array(count * 3);
     const col = new Float32Array(count * 3);
     const size = new Float32Array(count);
-    const R = [380, 700][L];
+    const phase = new Float32Array(count);
+    const R = [300, 720, 1500][L];
     for (let i = 0; i < count; i++) {
-      const u = Math.random() * 2 - 1;
-      const phi = Math.random() * Math.PI * 2;
-      const s = Math.sqrt(1 - u * u);
-      const r = R * (0.9 + Math.random() * 0.25);
-      pos[i * 3] = r * s * Math.cos(phi);
-      pos[i * 3 + 1] = r * u * 0.85;
-      pos[i * 3 + 2] = r * s * Math.sin(phi);
-      const b = 0.25 + Math.pow(Math.random(), 2.4) * 0.8;
-      col[i * 3] = b * 1.0;
-      col[i * 3 + 1] = b * (0.85 + Math.random() * 0.12);
-      col[i * 3 + 2] = b * (0.82 + Math.random() * 0.18);
-      size[i] = 0.7 + Math.pow(Math.random(), 4) * 3.0;
+      const rr = R * (0.92 + Math.random() * 0.16);
+      let px, py, pz;
+      if (Math.random() < 0.46) {
+        // 斜向星带：让背景有「银河带」的走向，而不是均匀噪点
+        const ang = Math.random() * Math.PI * 2;
+        px = Math.cos(ang) * rr;
+        py = (Math.random() - 0.5) * R * 0.18;
+        pz = Math.sin(ang) * rr;
+        const tilt = 0.46, cy = Math.cos(tilt), sy = Math.sin(tilt);
+        const ny = py * cy - pz * sy;
+        const nz = py * sy + pz * cy;
+        py = ny; pz = nz;
+      } else {
+        const u = Math.random() * 2 - 1;
+        const phi = Math.random() * Math.PI * 2;
+        const sq = Math.sqrt(1 - u * u);
+        px = rr * sq * Math.cos(phi);
+        py = rr * u;
+        pz = rr * sq * Math.sin(phi);
+      }
+      pos[i * 3] = px; pos[i * 3 + 1] = py; pos[i * 3 + 2] = pz;
+      const b = 0.13 + Math.pow(Math.random(), 2.9) * 0.62;
+      const warm = Math.random() < 0.12;
+      col[i * 3] = b * (warm ? 1.0 : 0.84 + Math.random() * 0.14);
+      col[i * 3 + 1] = b * (warm ? 0.84 : 0.91 + Math.random() * 0.09);
+      col[i * 3 + 2] = b * (warm ? 0.66 : 0.98 + Math.random() * 0.02);
+      size[i] = 0.5 + Math.pow(Math.random(), 4.2) * 2.3;
+      phase[i] = Math.random() * 6.2831;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
     g.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
     const m = new THREE.ShaderMaterial({
       uniforms: { uTime: { value: 0 }, uPixelRatio: { value: pixelRatio } },
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
       vertexShader: /* glsl */ `
-        attribute vec3 aColor; attribute float aSize;
-        uniform float uPixelRatio;
-        varying vec3 vColor;
+        attribute vec3 aColor; attribute float aSize; attribute float aPhase;
+        uniform float uPixelRatio; uniform float uTime;
+        varying vec3 vColor; varying float vTw;
         void main(){
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = clamp(aSize * uPixelRatio * 1.6, 0.8, 6.0 * uPixelRatio);
+          gl_PointSize = clamp(aSize * uPixelRatio * 1.45, 0.7, 4.6 * uPixelRatio);
           vColor = aColor;
+          float sp = 0.5 + fract(aPhase * 0.159) * 1.1;
+          vTw = 0.55 + 0.45 * sin(uTime * sp + aPhase);
         }
       `,
       fragmentShader: /* glsl */ `
-        varying vec3 vColor;
+        varying vec3 vColor; varying float vTw;
         void main(){
           vec2 uv = gl_PointCoord * 2.0 - 1.0;
           float d = dot(uv, uv);
           if (d > 1.0) discard;
-          gl_FragColor = vec4(vColor, pow(1.0 - d, 2.0));
+          gl_FragColor = vec4(vColor, pow(1.0 - d, 2.3) * vTw);
         }
       `,
     });
     const p = new THREE.Points(g, m);
     p.renderOrder = -5 + L;
     skyPivot.add(p);
-    stars.push({ points: p, speed: [0.006, 0.011][L] });
+    stars.push({ points: p, mat: m, speed: [0.004, 0.007, 0.011][L] });
   }
 
   /* ---------------- 背景里的其他行星 ---------------- */
@@ -309,7 +329,7 @@ export function createEarth(pixelRatio, tex) {
         skyPivot.quaternion.premultiply(qA).premultiply(qB);
       }
 
-      stars.forEach((s) => { s.points.rotation.y += dt * s.speed; });
+      stars.forEach((s) => { s.mat.uniforms.uTime.value = t; s.points.rotation.y += dt * s.speed; });
 
       const e = Math.pow(st.dolly, 1.15);
       // earthArrive：转场刚落地时 < 1，镜头贴近地球再缓缓拉开，衔接太阳系的俯冲
@@ -320,10 +340,10 @@ export function createEarth(pixelRatio, tex) {
       const eased = settle * settle * (3 - 2 * settle);
       // earthOut：升空回银河时，镜头先快速后退，把地球缩成一个光点
       const out = st.earthOut || 0;
-      const dist = THREE.MathUtils.lerp(4.6, 2.55, e) * arrive * (1 + out * 26);
+      const dist = THREE.MathUtils.lerp(3.05, 2.55, e) * arrive * (1 + out * 26);
       camera.position.set(0, 0, dist);
       camera.lookAt(0, 0, 0);
-      camera.fov = THREE.MathUtils.lerp(38, THREE.MathUtils.lerp(45, 52, e), eased);
+      camera.fov = THREE.MathUtils.lerp(38, THREE.MathUtils.lerp(43, 50, e), eased);
       camera.updateProjectionMatrix();
       // 轴倾角也跟着补间：俯冲过来的地球没有倾角，落地后慢慢立起来
       tilt.rotation.z = THREE.MathUtils.degToRad(23.4) * eased;

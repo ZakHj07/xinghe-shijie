@@ -38,7 +38,7 @@ canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block;}
 .hud{
   position:fixed;left:32px;top:104px;width:318px;z-index:6;
   padding:20px 22px 18px;
-  background:linear-gradient(150deg,rgba(10,22,40,.62),rgba(4,8,18,.48));
+  background:linear-gradient(150deg,rgba(8,17,32,.74),rgba(3,6,14,.62));
   border:1px solid var(--line);
   border-left:2px solid rgba(95,230,255,.55);
   border-radius:3px 14px 14px 3px;
@@ -56,7 +56,7 @@ canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block;}
 .hud-rule{height:1px;margin:16px 0 14px;background:linear-gradient(90deg,var(--cyan-dim),rgba(120,200,255,.04));}
 .hud-rows{display:flex;flex-direction:column;gap:11px;}
 .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:12px;line-height:1.5;
-  animation:rowIn .5s both;}
+  animation:rowIn .45s ease;}
 @keyframes rowIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .row .k{color:var(--muted);letter-spacing:.06em;white-space:nowrap;}
 .row .v{color:#eaf7ff;font-weight:500;text-align:right;letter-spacing:.02em;}
@@ -134,7 +134,8 @@ canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block;}
   background:linear-gradient(90deg,transparent,var(--cyan),transparent);
   box-shadow:0 0 10px rgba(95,230,255,.85);}
 /* 转场进行中：按钮变暗且不可点，避免连点把动画叠起来 */
-body.is-busy .scene-nav{opacity:.55;pointer-events:none;}
+body.is-busy .scene-nav,
+body.is-busy .planet-nav{opacity:.55;pointer-events:none;}
 
 /* ---------- 背景音乐开关 ---------- */
 .audio-btn{position:fixed;right:36px;bottom:58px;z-index:7;width:42px;height:42px;
@@ -214,7 +215,15 @@ body.is-busy .scene-nav{opacity:.55;pointer-events:none;}
   .nebula-a,.nebula-b{animation:none;}
 }
 
-.loader-inner{width:min(420px,86vw);text-align:center;position:relative;z-index:2;}
+.loader-inner{width:min(420px,86vw);text-align:center;position:relative;z-index:2;
+  /* 标题 / 按钮 / 提示统一坐在一块黑蓝半透明面板上，不让星云直接压字 */
+  padding:34px 34px 30px;border-radius:22px;
+  background:linear-gradient(160deg,rgba(6,12,24,.82) 0%,rgba(8,16,32,.70) 45%,rgba(4,8,18,.80) 100%);
+  border:1px solid rgba(120,180,240,.16);
+  box-shadow:0 24px 90px rgba(0,0,0,.55),inset 0 1px 0 rgba(190,225,255,.06);
+  -webkit-backdrop-filter:blur(18px) saturate(1.05);backdrop-filter:blur(18px) saturate(1.05);}
+.loader-inner::after{content:'';position:absolute;inset:-26px;border-radius:40px;z-index:-1;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(3,7,16,.72),rgba(3,7,16,0) 78%);}
 .loader-ring{width:64px;height:64px;margin:0 auto 26px;border-radius:50%;
   border:1px solid rgba(95,230,255,.18);border-top-color:var(--cyan);border-right-color:rgba(157,140,255,.8);
   animation:spin 1.15s linear infinite;box-shadow:0 0 36px rgba(95,230,255,.25);}
@@ -225,7 +234,7 @@ body.is-busy .scene-nav{opacity:.55;pointer-events:none;}
   text-shadow:0 1px 12px rgba(0,4,12,.95);}
 .loader-track{height:2px;border-radius:2px;background:rgba(120,200,255,.14);overflow:hidden;}
 #load-fill{height:100%;width:0%;background:linear-gradient(90deg,#3a7bff,#5fe6ff,#fff);transition:width .3s ease;box-shadow:0 0 14px rgba(95,230,255,.8);}
-.enter-btn{margin-top:30px;padding:13px 44px;font-family:var(--font);font-size:12.5px;letter-spacing:.36em;
+.enter-btn{margin-top:26px;padding:13px 44px;font-family:var(--font);font-size:12.5px;letter-spacing:.36em;
   color:#dff7ff;background:rgba(20,60,110,.28);border:1px solid rgba(95,230,255,.45);border-radius:2px;
   cursor:pointer;transition:.3s;backdrop-filter:blur(6px);}
 .enter-btn:disabled{opacity:.3;cursor:not-allowed;}
@@ -268,3 +277,106 @@ body.is-busy .scene-nav{opacity:.55;pointer-events:none;}
   .clabel b{font-size:10px;letter-spacing:.26em;}
   .clabel i{font-size:7px;}
 }
+/* 太阳系里的近邻恒星：名字要更轻，别抢行星和 HUD 的注意力 */
+.clabel-sm{gap:2px;}
+.clabel-sm b{font-size:10px;letter-spacing:.24em;padding-left:.24em;
+  color:rgba(226,242,255,.94);}
+.clabel-sm i{font-size:7px;letter-spacing:.16em;padding-left:.16em;
+  color:rgba(176,206,244,.78);}
+.clabel-sm::after{height:9px;background:linear-gradient(180deg,rgba(140,190,250,.34),rgba(140,190,250,0));}
+
+/* ---- 电影级长镜头：整段收起 UI ---- */
+body.cinema #hud,
+body.cinema #gesture-bar,
+body.cinema #scene-nav,
+body.cinema #cam-panel,
+body.cinema .brand,
+body.cinema #labels,
+body.cinema .audio-btn,
+body.cinema .fs-btn,
+body.cinema #warp-label {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.7s ease;
+}
+
+
+/* ---------- 层级 3：行星缩略导航条（鼠标备选方案） ---------- */
+.planet-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 150px;
+  transform: translateX(-50%);
+  display: none;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(10, 20, 38, .62), rgba(6, 12, 24, .74));
+  border: 1px solid rgba(120, 190, 255, .18);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
+  z-index: 7;
+}
+body[data-level="selector"] .planet-nav { display: flex; }
+body[data-level="detail"] .planet-nav { display: none; }
+
+.pnav-btn {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px 7px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(214, 232, 255, .62);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: .12em;
+  cursor: pointer;
+  transition: background .2s ease, color .2s ease, transform .12s ease;
+}
+.pnav-btn .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+  background: currentColor;
+}
+.pnav-btn:hover { background: rgba(90, 150, 220, .14); color: rgba(226, 242, 255, .92); }
+.pnav-btn:active { transform: scale(.96); }
+.pnav-btn.is-active {
+  background: linear-gradient(180deg, rgba(64, 140, 220, .30), rgba(30, 80, 150, .22));
+  color: #eaf6ff;
+  box-shadow: inset 0 0 0 1px rgba(140, 210, 255, .35);
+}
+@media (max-width: 720px) {
+  .planet-nav { bottom: 142px; gap: 2px; padding: 4px 5px; }
+  .pnav-btn { padding: 6px 8px; font-size: 10px; }
+  .pnav-btn .cn { display: none; }
+}
+
+
+/* ---------- 背景可读性：文字区加暗色遮罩，低亮度半透明 ---------- */
+.hud-rows,
+.hud-note { position: relative; }
+.hud::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(120% 80% at 20% 0%, rgba(3, 8, 18, .55), rgba(3, 8, 18, 0) 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+#gesture-bar {
+  background: linear-gradient(180deg, rgba(8, 16, 30, .58), rgba(4, 8, 18, .46)) !important;
+}
+#gesture-bar .gesture-text,
+#gesture-bar .gesture-sub {
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .85);
+}
+.scene-nav, .planet-nav {
+  background: linear-gradient(180deg, rgba(8, 16, 30, .60), rgba(4, 9, 18, .72)) !important;
+}
+.clabel b { text-shadow: 0 0 12px rgba(0, 0, 0, .9), 0 0 22px rgba(0, 0, 0, .7); }

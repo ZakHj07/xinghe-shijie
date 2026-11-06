@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLSL_NOISE, gauss, makeGlowTexture } from '../util.js';
+import { createDeepField } from './deepfield.js';
 
 /**
  * 粒子银河系：13 万颗星点组成的旋涡星系 + 程序化星云背景
@@ -140,8 +141,8 @@ export function createGalaxy(pixelRatio) {
         float core = pow(1.0 - d, 2.4);
         float tw = 0.78 + 0.22 * sin(uTime * 2.4 + vSeed * 39.0);
         // 进场时星系整体被压成一个点，粒子必须同步变暗变小，否则加色混合会糊成一个白球
-        vec3 col = vColor * (0.40 + 0.72 * core) * tw * uDim * mix(0.06, 1.0, uIntro);
-        gl_FragColor = vec4(col, core * 0.86 * mix(0.22, 1.0, uIntro));
+        vec3 col = vColor * (0.30 + 0.55 * core) * tw * uDim * mix(0.06, 1.0, uIntro);
+        gl_FragColor = vec4(col, core * 0.70 * mix(0.22, 1.0, uIntro));
       }
     `,
   });
@@ -166,7 +167,7 @@ export function createGalaxy(pixelRatio) {
       opacity: 0.42,
     })
   );
-  coreGlow.scale.set(26, 26, 1);
+  coreGlow.scale.set(20, 20, 1);
   galaxyGroup.add(coreGlow);
 
   const coreGlow2 = new THREE.Sprite(
@@ -179,7 +180,7 @@ export function createGalaxy(pixelRatio) {
       opacity: 0.12,
     })
   );
-  coreGlow2.scale.set(150, 150, 1);
+  coreGlow2.scale.set(120, 120, 1);
   scene.add(coreGlow2);
 
   /* ---------------- 背景星云穹顶 ---------------- */
@@ -224,23 +225,25 @@ export function createGalaxy(pixelRatio) {
         float band = exp(-h * h * 34.0);
         float halo = exp(-h * h * 3.2);
 
-        vec3 cSky   = vec3(0.0030, 0.0068, 0.0185);
-        vec3 cDust  = vec3(0.0280, 0.0560, 0.1050);
-        vec3 cTeal  = vec3(0.0200, 0.0950, 0.1450);
-        vec3 cAmber = vec3(0.1050, 0.0640, 0.0340);
+        vec3 cSky   = vec3(0.0021, 0.0048, 0.0128);
+        vec3 cDust  = vec3(0.0190, 0.0380, 0.0760);
+        vec3 cTeal  = vec3(0.0140, 0.0620, 0.1000);
+        vec3 cAmber = vec3(0.0900, 0.0540, 0.0300);
 
-        float fil = smoothstep(0.50, 0.93, n1);
+        float fil = smoothstep(0.54, 0.96, n1);
 
         vec3 col = cSky;
-        col += cDust * fil * (0.34 + 0.72 * band);
-        col += cTeal * pow(smoothstep(0.55, 0.96, n2), 2.0) * (0.07 + 0.42 * band);
-        col += cAmber * pow(smoothstep(0.60, 1.0, 1.0 - n2), 2.2) * band * 0.55;
-        col += vec3(0.42, 0.52, 0.80) * pow(smoothstep(0.74, 0.995, n3), 3.0) * (0.14 + 0.48 * band);
-        col += cDust * halo * 0.16;
+        // 云雾压得很淡：参考片里天空是「干净的深色 + 密密麻麻的小星」，
+        // 不是一团团发亮的星云，所以这里只留贴住银盘的薄雾与暗尘
+        col += cDust * fil * (0.16 + 0.46 * band);
+        col += cTeal * pow(smoothstep(0.60, 0.97, n2), 2.2) * (0.04 + 0.24 * band);
+        col += cAmber * pow(smoothstep(0.64, 1.0, 1.0 - n2), 2.4) * band * 0.30;
+        col += vec3(0.30, 0.40, 0.66) * pow(smoothstep(0.78, 0.998, n3), 3.2) * (0.06 + 0.28 * band);
+        col += cDust * halo * 0.13;
 
-        // 极细的星尘颗粒，负责「锐」
-        float sp = pow(fbm3(dir * 62.0 + vec3(uTime * 0.012)), 7.0);
-        col += vec3(0.56, 0.70, 1.0) * sp * 0.42 * (0.50 + band);
+        // 极细的星尘颗粒，负责「锐」—— 频率拉到 130，颗粒更小更密
+        float sp = pow(fbm3(dir * 130.0 + vec3(uTime * 0.010)), 8.0);
+        col += vec3(0.58, 0.72, 1.0) * sp * 0.30 * (0.55 + band);
 
         gl_FragColor = vec4(col * uOpacity, 1.0);
       }
@@ -251,7 +254,7 @@ export function createGalaxy(pixelRatio) {
   scene.add(nebula);
 
   /* ---------------- 远景星场 ---------------- */
-  const starN = 5600;
+  const starN = 13000;
   const starPos = new Float32Array(starN * 3);
   const starCol = new Float32Array(starN * 3);
   const starSize = new Float32Array(starN);
@@ -264,12 +267,18 @@ export function createGalaxy(pixelRatio) {
     starPos[i * 3] = r * s * Math.cos(phi);
     starPos[i * 3 + 1] = r * u * 0.8;
     starPos[i * 3 + 2] = r * s * Math.sin(phi);
-    const b = 0.30 + Math.pow(Math.random(), 2.4) * 0.85;
-    const warm = Math.random() < 0.22;
-    starCol[i * 3] = b * (warm ? 1.0 : 0.78);
-    starCol[i * 3 + 1] = b * (warm ? 0.86 : 0.88);
-    starCol[i * 3 + 2] = b * (warm ? 0.66 : 1.0);
-    starSize[i] = 0.45 + Math.pow(Math.random(), 5) * 2.4;
+    // 参考片里绝大多数是单像素小星，只有极少数亮星带衍射十字
+    const b = 0.20 + Math.pow(Math.random(), 3.0) * 0.58;
+    const roll = Math.random();
+    let cr, cg, cb;
+    if (roll < 0.55) { cr = 0.80; cg = 0.88; cb = 1.00; }        // 蓝白（B/A 型）
+    else if (roll < 0.82) { cr = 1.00; cg = 0.97; cb = 0.93; }   // 白（F/G 型）
+    else if (roll < 0.96) { cr = 1.00; cg = 0.82; cb = 0.62; }   // 暖橙（K/M 型）
+    else { cr = 0.72; cg = 0.82; cb = 1.00; }                    // 偏蓝的亮星
+    starCol[i * 3] = b * cr;
+    starCol[i * 3 + 1] = b * cg;
+    starCol[i * 3 + 2] = b * cb;
+    starSize[i] = 0.40 + Math.pow(Math.random(), 6.5) * 2.1;
     starSeed[i] = Math.random();
   }
   const starGeo = new THREE.BufferGeometry();
@@ -293,7 +302,7 @@ export function createGalaxy(pixelRatio) {
           gl_Position = projectionMatrix * mv;
           gl_PointSize = max(1.0, aSize * uPixelRatio * 3.4);
           vColor = aColor; vSeed = aSeed;
-          vFlare = step(2.0, aSize);   // 只有最亮的几颗带十字衍射
+          vFlare = step(1.55, aSize);   // 只有最亮的几颗带十字衍射
         }
       `,
       fragmentShader: /* glsl */ `
@@ -305,7 +314,7 @@ export function createGalaxy(pixelRatio) {
           // 锐利的小核 + 很淡的晕，避免一团糊
           float core = smoothstep(0.42, 0.0, d);
           float halo = pow(max(0.0, 1.0 - d), 3.2);
-          float a = core * 0.95 + halo * 0.28;
+          float a = core * 0.78 + halo * 0.22;
           float fx = smoothstep(0.90, 0.0, abs(uv.x)) * smoothstep(0.26, 0.0, abs(uv.y));
           float fy = smoothstep(0.90, 0.0, abs(uv.y)) * smoothstep(0.26, 0.0, abs(uv.x));
           a += (fx + fy) * 0.28 * vFlare;
@@ -384,7 +393,7 @@ export function createGalaxy(pixelRatio) {
           uTime: uniforms.uTime,
           uPixelRatio: uniforms.uPixelRatio,
           uScale: { value: scale },
-          uBright: { value: bright },
+          uBright: { value: bright * 0.95 },
         },
         vertexShader: companionVert,
         fragmentShader: companionFrag,
@@ -419,7 +428,233 @@ export function createGalaxy(pixelRatio) {
       label: cfg.label || '',
       sub: cfg.sub || '',
       labelOffset: cfg.labelOffset || 0,
+      uBright: mesh.material && mesh.material.uniforms ? mesh.material.uniforms.uBright : null,
+      bright0: mesh.material && mesh.material.uniforms ? mesh.material.uniforms.uBright.value : 1,
     });
+  }
+
+  /* ---------------- 深空邻居：星系与星云（近 / 中 / 远三层） ---------------- */
+  const deepField = createDeepField({ rScale: 1.15, opacityScale: 0.16 });
+  // 统一偏冷的低饱和色，禁止大面积红/蓝光斑
+  deepField.setTint(new THREE.Color(0.62, 0.72, 0.92));
+  scene.add(deepField.group);
+
+  /* ---------------- 流沙星河：铺满整个天空的两层尘埃 ----------------
+     不挂在 galaxyGroup 上 —— 它是「整个宇宙的背景」，任何视角、任何距离都看得到，
+     也不参与进场动画（银河本体和邻居才做从中心长出来的过渡）。         */
+  const dustUniforms = {
+    uTime: { value: 0 },
+    uPixelRatio: { value: pixelRatio },
+    uAxis: { value: new THREE.Vector3(0.18, 1.0, 0.24).normalize() },
+    uGain: { value: 1 },
+  };
+  const DUST_VERT = /* glsl */ `
+    attribute vec3 aColor;
+    attribute vec3 aAttr;   // (size, speed, phase)
+    uniform float uTime;
+    uniform float uPixelRatio;
+    uniform vec3 uAxis;
+    uniform float uGain;
+    varying vec3 vColor;
+    varying float vTw;
+    vec3 rotAxis(vec3 p, vec3 ax, float a) {
+      float c = cos(a), s = sin(a);
+      return p * c + cross(ax, p) * s + ax * dot(ax, p) * (1.0 - c);
+    }
+    void main() {
+      // 内圈转得快、外圈慢，整个尘埃层像被慢慢搅动的沙
+      float ang = uTime * aAttr.y + aAttr.z;
+      vec3 p = rotAxis(position, uAxis, ang);
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = clamp(aAttr.x * uPixelRatio, 1.0, 3.4 * uPixelRatio);
+      vColor = aColor * uGain;
+      vTw = 0.62 + 0.38 * sin(uTime * (0.35 + fract(aAttr.z) * 1.2) + aAttr.z * 3.1);
+    }
+  `;
+  const DUST_FRAG = /* glsl */ `
+    varying vec3 vColor;
+    varying float vTw;
+    void main() {
+      vec2 uv = gl_PointCoord * 2.0 - 1.0;
+      float d = dot(uv, uv);
+      if (d > 1.0) discard;
+      gl_FragColor = vec4(vColor, pow(1.0 - d, 2.0) * vTw);
+    }
+  `;
+  const bandRot = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(0.42, 0.9, -0.18));
+  function buildDust({ count, rMin, rMax, spread, speedMin, speedMax, sizeMin, sizeMax, bright, bandRatio }) {
+    const pos = new Float32Array(count * 3);
+    const col = new Float32Array(count * 3);
+    const attr = new Float32Array(count * 3);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < count; i++) {
+      const r = rMin + Math.pow(Math.random(), 0.55) * (rMax - rMin);
+      const u = Math.random() * 2 - 1;
+      const th = Math.random() * Math.PI * 2;
+      if (Math.random() < bandRatio) {
+        // 一部分贴着一条倾斜的大圆铺开 —— 流沙的「带状」质感
+        const y = (Math.random() - 0.5) * 0.34;
+        const sq = Math.sqrt(Math.max(0, 1 - y * y));
+        v.set(Math.cos(th) * sq, y, Math.sin(th) * sq).normalize();
+        v.applyMatrix4(bandRot);
+      } else {
+        const sq = Math.sqrt(1 - u * u);
+        v.set(Math.cos(th) * sq, u, Math.sin(th) * sq).normalize();
+      }
+      pos[i * 3] = v.x * r * spread;
+      pos[i * 3 + 1] = v.y * r;
+      pos[i * 3 + 2] = v.z * r * spread;
+      const b = bright * (0.30 + Math.pow(Math.random(), 2.4) * 1.0);
+      const warm = Math.random() < 0.16;
+      col[i * 3] = b * (warm ? 1.0 : 0.74);
+      col[i * 3 + 1] = b * (warm ? 0.79 : 0.85);
+      col[i * 3 + 2] = b * (warm ? 0.55 : 1.0);
+      attr[i * 3] = sizeMin + Math.pow(Math.random(), 2.2) * (sizeMax - sizeMin);
+      const slow = 1 / Math.sqrt(Math.max(1, r / rMin));
+      attr[i * 3 + 1] = (speedMin + Math.random() * (speedMax - speedMin)) * slow;
+      attr[i * 3 + 2] = Math.random() * Math.PI * 2;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('aAttr', new THREE.BufferAttribute(attr, 3));
+    const m = new THREE.ShaderMaterial({
+      uniforms: dustUniforms,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      vertexShader: DUST_VERT,
+      fragmentShader: DUST_FRAG,
+    });
+    const pts = new THREE.Points(g, m);
+    pts.frustumCulled = false;
+    return pts;
+  }
+  // 远景：整个天穹的细沙，站位最远，几乎不动
+  const dustFar = buildDust({
+    count: 30000, rMin: 900, rMax: 2900, spread: 1.0,
+    speedMin: 0.004, speedMax: 0.012, sizeMin: 1.0, sizeMax: 2.6,
+    bright: 0.36, bandRatio: 0.42,
+  });
+  dustFar.renderOrder = -6;
+  scene.add(dustFar);
+  // 近景：围着银盘的一圈沙，转得更明显，镜头动起来才有「流沙」的拖影
+  const dustNear = buildDust({
+    count: 16000, rMin: 190, rMax: 640, spread: 1.0,
+    speedMin: 0.020, speedMax: 0.060, sizeMin: 1.1, sizeMax: 3.0,
+    bright: 0.42, bandRatio: 0.34,
+  });
+  dustNear.renderOrder = -5;
+  scene.add(dustNear);
+
+  /* ---------------- 太阳的「落点」微光：俯冲时逐渐浮现，接住转场 ---------------- */
+  const sunSparkTex = new THREE.CanvasTexture(
+    makeGlowTexture('rgba(255,255,255,1)', 'rgba(255,214,150,0.75)', 128)
+  );
+  sunSparkTex.colorSpace = THREE.SRGBColorSpace;
+  const sunSpark = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: sunSparkTex,
+      color: 0xffe6b8, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0,
+    })
+  );
+  sunSpark.scale.set(14, 14, 1);
+  scene.add(sunSpark);
+
+  /* ---------------- 俯冲掠过的恒星：沿飞行走廊撒一条「星星隧道」 ----------------
+     起点用一堆小暗星，越接近太阳系越大越亮 —— 观感上就是「周围划过的
+     先是远处星系，快到时变成太阳附近的邻居」。                            */
+  const DIVE_STAR_MAX = 620;
+  const diveStarPos = new Float32Array(DIVE_STAR_MAX * 3);
+  const diveStarCol = new Float32Array(DIVE_STAR_MAX * 3);
+  const diveStarSize = new Float32Array(DIVE_STAR_MAX);
+  const diveStarGeo = new THREE.BufferGeometry();
+  diveStarGeo.setAttribute('position', new THREE.BufferAttribute(diveStarPos, 3));
+  diveStarGeo.setAttribute('aColor', new THREE.BufferAttribute(diveStarCol, 3));
+  diveStarGeo.setAttribute('aSize', new THREE.BufferAttribute(diveStarSize, 1));
+  const diveStarUniforms = { uOpacity: { value: 0 }, uPixelRatio: { value: pixelRatio } };
+  const diveStars = new THREE.Points(
+    diveStarGeo,
+    new THREE.ShaderMaterial({
+      uniforms: diveStarUniforms,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      vertexShader: /* glsl */ `
+        attribute vec3 aColor; attribute float aSize;
+        uniform float uPixelRatio;
+        varying vec3 vColor; varying float vA;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          float d = max(-mv.z, 1.0);
+          gl_PointSize = clamp(aSize * uPixelRatio * (900.0 / d), 1.0, 7.0 * uPixelRatio);
+          vColor = aColor;
+          // 太近的星星直接淡出，免得糊住整个屏幕
+          vA = smoothstep(7.0, 30.0, d);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uOpacity;
+        varying vec3 vColor; varying float vA;
+        void main() {
+          vec2 uv = gl_PointCoord * 2.0 - 1.0;
+          float d = dot(uv, uv);
+          if (d > 1.0) discard;
+          gl_FragColor = vec4(vColor, pow(1.0 - d, 1.6) * vA * uOpacity);
+        }
+      `,
+    })
+  );
+  diveStars.frustumCulled = false;
+  diveStars.visible = false;
+  diveStars.renderOrder = -2;
+  scene.add(diveStars);
+
+  /* ---- 径向星芒拖尾：真正穿过星际时才拉出的短划线 ---- */
+  const STREAK_MAX = 520;
+  const streakPos = new Float32Array(STREAK_MAX * 6);
+  const streakCol = new Float32Array(STREAK_MAX * 6);
+  const streakBase = new Float32Array(STREAK_MAX * 3);
+  const streakSeed = new Float32Array(STREAK_MAX);
+  const streakGeo = new THREE.BufferGeometry();
+  streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3));
+  streakGeo.setAttribute('color', new THREE.BufferAttribute(streakCol, 3));
+  const streakMat = new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const streaks = new THREE.LineSegments(streakGeo, streakMat);
+  streaks.frustumCulled = false;
+  streaks.visible = false;
+  streaks.renderOrder = -2;
+  scene.add(streaks);
+  for (let i = 0; i < STREAK_MAX; i++) {
+    streakSeed[i] = 0.35 + Math.pow(Math.random(), 1.8) * 1.65;
+  }
+
+  const tmpDir = new THREE.Vector3();
+  function spawnDiveStars(from, aim) {
+    const seg = aim.clone().sub(from);
+    for (let i = 0; i < DIVE_STAR_MAX; i++) {
+      const f = Math.pow(Math.random(), 0.85);
+      const px = from.x + seg.x * f;
+      const py = from.y + seg.y * f;
+      const pz = from.z + seg.z * f;
+      // 横向散布：近端散得开，末端收拢成「太阳附近的一簇」
+      const spread = (55 - 34 * f) * (0.25 + Math.pow(Math.random(), 0.7));
+      tmpDir.set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+      diveStarPos[i * 3] = px + tmpDir.x * spread;
+      diveStarPos[i * 3 + 1] = py + tmpDir.y * spread;
+      diveStarPos[i * 3 + 2] = pz + tmpDir.z * spread;
+      const big = Math.pow(f, 2.4);
+      diveStarSize[i] = 0.8 + big * 2.8 + Math.random() * 1.0;
+      const warm = Math.random() < 0.24;
+      const b = 0.32 + big * 0.62;
+      diveStarCol[i * 3] = b * (warm ? 1.0 : 0.80);
+      diveStarCol[i * 3 + 1] = b * (warm ? 0.80 : 0.89);
+      diveStarCol[i * 3 + 2] = b * (warm ? 0.58 : 1.0);
+    }
+    diveStarGeo.attributes.position.needsUpdate = true;
+    diveStarGeo.attributes.aColor.needsUpdate = true;
+    diveStarGeo.attributes.aSize.needsUpdate = true;
   }
 
   // ---- 仙女座 M31：大而斜的盘 + 明亮核球 + 两个卫星（M32 / M110）----
@@ -652,12 +887,16 @@ export function createGalaxy(pixelRatio) {
       t += dt;
       uniforms.uTime.value = t;
       nebulaUniforms.uTime.value = t;
+      dustUniforms.uTime.value = t;
+      deepField.update(dt, 1.0 - 0.85 * (st.nebFade || 0), uniforms.uIntro.value);
+      // 背景尘埃不参与进场动画：亮度恒定，只有俯冲时稍微提一点速度感
+      dustUniforms.uGain.value = (1.0 + 0.55 * (st.galaxyDive || 0)) * (1.0 - 0.35 * (st.nebFade || 0));
       nebula.rotation.y = t * 0.004;
 
       galaxyGroup.rotation.y = t * 0.008;
       // 背景尘埃带的朝向跟随银盘，两者才会互相协调
       nebulaUniforms.uPlane.value.set(0, 1, 0).applyEuler(galaxyGroup.rotation);
-      coreGlow.material.opacity = 0.15 + Math.sin(t * 1.4) * 0.04;
+      coreGlow.material.opacity = 0.10 + Math.sin(t * 1.4) * 0.03;
 
       // 邻近星系：自转 + 沿轨道缓慢漂移
       for (const c of companions) {
@@ -688,8 +927,14 @@ export function createGalaxy(pixelRatio) {
       // 进场：银河从中心一个点里「跃出」——整盘从极小撑开，而不是靠相机后退
       const grow = 0.06 + 0.94 * intro;
       galaxyGroup.scale.setScalar(grow);
-      coreGlow2.material.opacity = 0.12 * (1.0 - 0.6 * e) * Math.min(1, intro * 1.6);
-      for (const c of companions) c.pivot.visible = intro > 0.985;
+      coreGlow2.material.opacity = 0.075 * (1.0 - 0.6 * e) * Math.min(1, intro * 1.6);
+      // 邻近星系随进场一起「长出来」（背景流沙不参与，从头就在）
+      const compFade = THREE.MathUtils.smoothstep(intro, 0.82, 0.995);
+      for (const c of companions) {
+        c.pivot.visible = compFade > 0.002;
+        if (c.uBright) c.uBright.value = c.bright0 * compFade;
+        c.pivot.scale.setScalar(0.62 + 0.38 * compFade);
+      }
 
       // 银河 → 太阳系：镜头朝着「太阳所在的那条臂」冲过去
       const diveK = st.galaxyDive || 0;
@@ -699,9 +944,12 @@ export function createGalaxy(pixelRatio) {
         const sunTheta = Math.log(sunR / 7) * 2.2;
         sunAnchorLocal.set(Math.cos(sunTheta) * sunR, 0, Math.sin(sunTheta) * sunR);
         sunAnchorWorld.copy(sunAnchorLocal).applyEuler(galaxyGroup.rotation).multiplyScalar(grow);
-        if (divePrev <= 0.0005) diveFrom.copy(camPos);
-        const outward = camPos.clone().normalize();
-        diveAim.copy(sunAnchorWorld).addScaledVector(outward, 6.5);
+        if (divePrev <= 0.0005) {
+          diveFrom.copy(camPos);
+          // 收尾机位：停在太阳锚点外侧、沿半径朝外，镜头回望整片银盘
+          diveAim.copy(sunAnchorWorld).multiplyScalar(1.14);
+          spawnDiveStars(diveFrom, diveAim);
+        }
         const k = easeIO(diveK);
         camPos.lerpVectors(diveFrom, diveAim, k);
         lookTarget.copy(sunAnchorWorld).multiplyScalar(Math.min(1, diveK * 2.2));
@@ -710,6 +958,64 @@ export function createGalaxy(pixelRatio) {
         lookTarget.set(0, 0, 0);
       }
       divePrev = diveK;
+      if (diveK > 0.0005) {
+        diveStars.visible = true;
+        diveStarUniforms.uOpacity.value =
+          0.62 * THREE.MathUtils.smoothstep(diveK, 0.015, 0.10) * (1 - THREE.MathUtils.smoothstep(diveK, 0.90, 1.0));
+      } else if (diveStars.visible) {
+        diveStars.visible = false;
+        diveStarUniforms.uOpacity.value = 0;
+      }
+
+      /* 星芒拖尾：速度越快拉得越长，切镜前后各自收掉 */
+      if (diveK > 0.0005) {
+        const sp = THREE.MathUtils.clamp(((diveK - divePrev) / Math.max(dt, 1e-3)) * 4.2, 0, 1);
+        const env = THREE.MathUtils.smoothstep(diveK, 0.02, 0.12) *
+                    (1 - THREE.MathUtils.smoothstep(diveK, 0.86, 0.995));
+        for (let i = 0; i < STREAK_MAX; i++) {
+          const j = i * 3;
+          const bx = diveStarPos[j], by = diveStarPos[j + 1], bz = diveStarPos[j + 2];
+          streakBase[j] = bx; streakBase[j + 1] = by; streakBase[j + 2] = bz;
+          let dx = bx - camPos.x, dy = by - camPos.y, dz = bz - camPos.z;
+          const d = Math.max(Math.hypot(dx, dy, dz), 1e-3);
+          dx /= d; dy /= d; dz /= d;
+          const len = (1.5 + 26 * sp) * streakSeed[i] * env;
+          const k6 = i * 6;
+          streakPos[k6] = bx - dx * len;
+          streakPos[k6 + 1] = by - dy * len;
+          streakPos[k6 + 2] = bz - dz * len;
+          streakPos[k6 + 3] = bx + dx * len * 0.35;
+          streakPos[k6 + 4] = by + dy * len * 0.35;
+          streakPos[k6 + 5] = bz + dz * len * 0.35;
+          const c = 0.55 + 0.45 * Math.min(1, sp * 1.6);
+          streakCol[k6] = c; streakCol[k6 + 1] = c * 0.96; streakCol[k6 + 2] = c;
+          streakCol[k6 + 3] = c * 0.35; streakCol[k6 + 4] = c * 0.38; streakCol[k6 + 5] = c * 0.45;
+        }
+        streakGeo.attributes.position.needsUpdate = true;
+        streakGeo.attributes.color.needsUpdate = true;
+        streakMat.opacity = 0.50 * env * (0.25 + 0.75 * sp);
+        streaks.visible = streakMat.opacity > 0.004;
+      } else if (streaks.visible) {
+        streaks.visible = false;
+        streakMat.opacity = 0;
+      }
+
+      // 太阳落点：俯冲越深越亮，用来把「银河里的一个点」长成太阳系的太阳
+      {
+        const sR = 52;
+        const sTheta = Math.log(sR / 7) * 2.2;
+        sunAnchorLocal.set(Math.cos(sTheta) * sR, 0, Math.sin(sTheta) * sR);
+        sunAnchorWorld.copy(sunAnchorLocal).applyEuler(galaxyGroup.rotation).multiplyScalar(grow);
+        sunSpark.position.copy(sunAnchorWorld);
+        const dSpark = Math.max(camPos.distanceTo(sunAnchorWorld), 0.001);
+        const rise = THREE.MathUtils.smoothstep(diveK, 0.10, 0.55);
+        // 一直亮到切镜那一瞬 —— 它就是「要变成太阳的那个点」
+        // 一直亮到切镜 —— 它就是那颗要变成太阳的星，绝不能提前灭
+        sunSpark.material.opacity = rise * uniforms.uIntro.value;
+        // 角径固定在 ~10°，像一颗越飞越近但形状不变的「目标星」
+        const sc = THREE.MathUtils.clamp(dSpark * 0.20, 0.8, 60);
+        sunSpark.scale.set(sc, sc, 1);
+      }
 
       camera.position.copy(camPos);
       camera.lookAt(lookTarget);
@@ -718,14 +1024,20 @@ export function createGalaxy(pixelRatio) {
 
       // 靠近时略微抬升曝光感
       pointsMat.uniforms.uSize.value = 1.0 + e * 0.9;
-      nebulaUniforms.uOpacity.value = 1.0 - e * 0.25;
+      const nebFade = st.nebFade == null ? 0 : st.nebFade;
+      nebulaUniforms.uOpacity.value = (1.0 - e * 0.25) * (1.0 - 0.88 * nebFade);
       // 但粒子/辉光会叠成一片白，靠近时按比例收一收
-      uniforms.uDim.value = 1.0 - 0.46 * e;
+      // 俯冲穿盘时粒子会叠成一片白墙，按 dive 再收一档
+      // 末尾把银盘整体压黑，只留那颗「目标星」，切镜就藏在光里
+      const endFade = 1 - THREE.MathUtils.smoothstep(diveK, 0.86, 0.996);
+      uniforms.uDim.value = (1.0 - 0.46 * e) * (1 - 0.45 * diveK) * (0.18 + 0.82 * endFade);
       // 进场时星系从中心一点长大的过程里，粒子要一起变小变暗（否则糊成白球）
       const iv = st.intro == null ? 1 : Math.min(1, Math.max(0, st.intro));
       uniforms.uIntro.value = iv * iv * (3 - 2 * iv);
-      coreGlow.material.opacity *= (1.0 - 0.55 * e) * uniforms.uIntro.value;
-      coreGlow2.material.opacity = 0.12 * (1.0 - 0.6 * e) * uniforms.uIntro.value;
+      // 俯冲到核心附近时，这两张明尺寸的辉光会把整屏刷白 —— 按 dive 大幅收掉
+      const glowKill = 1 - 0.92 * diveK;
+      coreGlow.material.opacity *= (1.0 - 0.55 * e) * uniforms.uIntro.value * glowKill;
+      coreGlow2.material.opacity = 0.075 * (1.0 - 0.6 * e) * uniforms.uIntro.value * glowKill;
     },
     resize(w, h) {
       camera.aspect = w / h;

@@ -58,6 +58,9 @@ export function createHandTracker({ video, overlay }) {
   let landmarker = null;
   let lastVideoTime = -1;
   let lastDetect = 0;
+  // 隔帧识别：识别频率压到渲染帧率的 1/2，手势计算与渲染解耦，不抢主线程
+  let detectTick = 0;
+  const DETECT_EVERY = 2;
   let lastPalm = null;
   let lastDraw = 0;
   let lastDrawKey = '';
@@ -268,6 +271,8 @@ export function createHandTracker({ video, overlay }) {
     if (!landmarker || video.readyState < 2 || document.hidden) return state;
     // 30Hz 足够：MediaPipe 跑得更快只会白烧 CPU，相机本来也就 30 帧
     if (now - lastDetect < 30) return state;
+    detectTick = (detectTick + 1) % DETECT_EVERY;
+    if (detectTick !== 0) return state;
     if (video.currentTime === lastVideoTime) return state;
     lastDetect = now;
     lastVideoTime = video.currentTime;

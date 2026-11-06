@@ -46,7 +46,7 @@ http
       res.writeHead(200, {
         'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
         'content-length': st.size,
-        'cache-control': 'no-cache',
+        'cache-control': 'no-store, must-revalidate',
       });
       fs.createReadStream(file).pipe(res);
     });

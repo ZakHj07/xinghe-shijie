@@ -9,6 +9,7 @@ import { createEarth } from './scenes/earth.js';
 import { createHandTracker } from './gestures.js';
 import { initLoaderBg } from './loaderbg.js';
 import { createAudio } from './audio.js';
+import { makeSharpenPass } from './sharpen.js';
 import { clamp, lerp, smoothstep } from './util.js';
 
 /* =========================================================
@@ -62,7 +63,7 @@ for (const [key, path] of Object.entries(TEX_PATHS)) {
   const t = loader.load(path);
   t.colorSpace = key === 'earthWater' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   if (key === 'earthWater') t.anisotropy = 1;
-  else t.anisotropy = Math.min(8, maxAniso);
+  else t.anisotropy = Math.min(16, maxAniso);
   tex[key] = t;
 }
 
@@ -174,13 +175,17 @@ let active = SCENES.galaxy;
 const composer = new EffectComposer(renderer);
 /* WebGL2 下给整个后期链开 4x MSAA：Bloom/Output 都在同一个多采样缓冲里走，
    星球边缘、土星环、轨道线不再有锯齿 */
-composer.renderTarget1.samples = 4;
-composer.renderTarget2.samples = 4;
+const MSAA_MAX = Math.min(4, renderer.capabilities.maxSamples || 4);
+composer.renderTarget1.samples = MSAA_MAX;
+composer.renderTarget2.samples = MSAA_MAX;
 const renderPass = new RenderPass(galaxy.scene, galaxy.camera);
 composer.addPass(renderPass);
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.0, 0.7, 0.42);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
+/* 最后一道：轻微反锐化，把 star / 行星边缘从 bloom 的柔光里拉回来 */
+const sharpenPass = makeSharpenPass(window.innerWidth * dprNow, window.innerHeight * dprNow, 0.40);
+composer.addPass(sharpenPass);
 
 /* 只改渲染分辨率，不动几何与材质 —— 帧率掉下来时最划算的一刀 */
 function applyQuality() {
@@ -188,7 +193,14 @@ function applyQuality() {
   if (Math.abs(next - dprNow) < 0.02) return;
   dprNow = next;
   renderer.setPixelRatio(next);
+  // 分辨率降档时 MSAA 同步减半，省填充带宽（画面几乎看不出差别）
+  const ms = next < 1.0 ? Math.min(2, MSAA_MAX) : MSAA_MAX;
+  if (composer.renderTarget1.samples !== ms) {
+    composer.renderTarget1.samples = ms;
+    composer.renderTarget2.samples = ms;
+  }
   composer.setSize(window.innerWidth, window.innerHeight);
+  sharpenPass.setSize(window.innerWidth * next, window.innerHeight * next);
   Object.values(SCENES).forEach((s) => {
     if (s.resize) s.resize(window.innerWidth, window.innerHeight);
     // 点精灵的 gl_PointSize 是设备像素，分辨率一变就得跟着补偿，否则星星会忽大忽小
@@ -201,14 +213,26 @@ function applyQuality() {
 
 const BLOOM = {
   galaxy: { strength: 0.74, radius: 0.6, threshold: 0.54 },
-  solar: { strength: 0.62, radius: 0.6, threshold: 0.62 },
+  solar: { strength: 0.34, radius: 0.28, threshold: 0.80 },
   earth: { strength: 0.38, radius: 0.5, threshold: 0.8 },
 };
 
 /* =========================================================
    交互状态
    ========================================================= */
-const st = { yaw: 0, pitch: 0, dolly: 0, dive: 0, earthArrive: 1, intro: 1, solarArrive: 1, galaxyDive: 0, earthOut: 0 };
+const st = { yaw: 0, pitch: 0, dolly: 0, dive: 0, earthArrive: 1, intro: 1, solarArrive: 1, galaxyDive: 0, earthOut: 0, nebFade: 0, clean: 0, sunReveal: 1, earthReveal: 1, track: -1 };
+/* ---------- 四个固定层级：银河 → 太阳系 → 行星选择 → 行星特写 ---------- */
+const LEVELS = ['galaxy', 'solar', 'selector', 'detail'];
+let level = 'galaxy';
+let levelIndex = 0;
+// 层级 3 / 4 的镜头参数（由 solar 场景消费）
+st.focus = 2;        // 居中的行星
+st.focusPrev = 2;    // 上一颗（切换时做弧形过渡）
+st.focusBlend = 1;   // 0→1 切换进度
+st.focusAmt = 0;     // 0 = 太阳系全景，1 = 停在行星上
+st.detailAmt = 0;    // 0 = 轮播距离，1 = 特写距离
+// 层级内的镜头动画（不切场景，只推镜头）
+const F = { active: false, t: 0, dur: 1, a: null, b: null, switchOnly: false };
 let dollyNow = 0;      // 实际使用的缩放值（每帧向 dollyTarget 平滑靠拢）
 let dollyTarget = 0;   // 输入 / 调试钩子写进来的目标值
 Object.defineProperty(st, 'dolly', {
@@ -385,6 +409,36 @@ const easeIO = (x) => {
   return k * k * (3 - 2 * k);
 };
 
+/* ---------------- 15 秒电影级推进曲线 ---------------- */
+// 速度分段：0–3s 缓慢起步，3–10s 逐渐加速，10–13s 刹车，13–15s 缓缓收尾。
+// 对速度做积分 → 归一化，就得到「尺度进度 P(时间)」的查找表。
+const CINEMA_DUR = 7.0;
+const CINEMA_TABLE = (() => {
+  const N = 1500;
+  const dt = CINEMA_DUR / N;
+  const v = (t) => {
+    if (t < 1.5) return 0.10 + 0.03 * (t / 1.5);
+    if (t < 4.4) return 0.13 + 1.05 * Math.pow((t - 1.5) / 2.9, 1.8);
+    if (t < 6.0) return 0.13 + 1.05 * Math.pow(1 - (t - 4.4) / 1.6, 1.4);
+    return 0.13 * (1 - 0.5 * ((t - 6.0) / 1.0));
+  };
+  const out = new Float32Array(N + 1);
+  let acc = 0;
+  for (let i = 0; i < N; i++) {
+    acc += v(i * dt) * dt;
+    out[i + 1] = acc;
+  }
+  for (let i = 0; i <= N; i++) out[i] /= acc;
+  return out;
+})();
+function cinemaP(u) {
+  const n = CINEMA_TABLE.length - 1;
+  const x = clamp(u, 0, 1) * n;
+  const i = Math.floor(x);
+  const f = x - i;
+  return CINEMA_TABLE[i] * (1 - f) + CINEMA_TABLE[Math.min(i + 1, n)] * f;
+}
+
 function beginTransition(to) {
   if (T.active) return;
   const from = currentKey;
@@ -396,13 +450,13 @@ function beginTransition(to) {
   if (from === 'galaxy' && to === 'solar') {
     // 朝太阳在银河里的位置冲过去：银河一路放大，最后一刻才换成太阳系
     mode = 'galaxyDive';
-    dur = 3.4;
-    swapAt = 0.76;
+    dur = CINEMA_DUR;      // 15 秒电影级长镜头
+    swapAt = 0.80;         // 12s 处从银河切到太阳系，后面 3s 收尾
     label = '穿越猎户臂 · 太阳系';
   } else if (from === 'solar' && to === 'earth') {
     mode = 'dive';
-    dur = 3.6;
-    swapAt = 0.72;
+    dur = 7.0;          // 太阳系 → 地球：一段连续推进的长镜头
+    swapAt = 0.80;
     label = '俯冲 · 地球';
   } else if (from === 'earth' && to === 'galaxy') {
     // 从一个点里长回整片银河
@@ -435,11 +489,16 @@ function beginTransition(to) {
   T.to = to;
   T.swapped = false;
   T.mode = mode;
+  // 15 秒电影级长镜头期间收起所有 UI（无文字、无面板），落地后再淡回来
+  document.body.classList.toggle('cinema', mode === 'galaxyDive' || mode === 'dive');
   T.dur = dur;
   T.swapAt = swapAt;
   document.body.classList.add('is-busy');
   st.dive = 0;
   st.galaxyDive = 0;
+  st.sunReveal = 1;
+  st.earthReveal = 1;
+  st.track = -1;
   st.earthOut = 0;
   st.solarArrive = 1;
   warpMat.uniforms.uColor.value.set(SCENE_INFO[to].color);
@@ -468,12 +527,20 @@ function beginIntro() {
   audio.transition('intro', 3.6, 0.5);
 }
 
+function syncBloom(key) {
+  const on = key === 'galaxy' || level === 'detail';
+  bloom.enabled = on;
+  bloom.strength = on ? BLOOM[key].strength : 0;
+  bloom.radius = BLOOM[key].radius;
+  bloom.threshold = BLOOM[key].threshold;
+}
+
 function applyScene(key) {
   currentKey = key;
   active = SCENES[key];
   renderPass.scene = active.scene;
   renderPass.camera = active.camera;
-  bloom.strength = BLOOM[key].strength;
+  syncBloom(key);
   bloom.radius = BLOOM[key].radius;
   bloom.threshold = BLOOM[key].threshold;
 
@@ -492,13 +559,9 @@ function applyScene(key) {
   st.earthOut = 0;
   if (key !== 'galaxy') st.intro = 1;
   updateHUD(key);
+  setLevel(key === 'galaxy' ? 'galaxy' : 'solar');
   audio.setScene(key);
-  document.querySelectorAll('.scene-nav .nav-btn').forEach((el) => {
-    const on = el.dataset.scene === key;
-    el.classList.toggle('is-active', on);
-    if (on) el.setAttribute('aria-current', 'true');
-    else el.removeAttribute('aria-current');
-  });
+  syncNav();
 }
 
 /* =========================================================
@@ -531,9 +594,10 @@ const HUD_DATA = {
       ['表面温度', '约 5500 <em>°C</em>'],
       ['核心温度', '约 1500 万 <em>°C</em>'],
       ['太阳质量', '1.989×10³⁰ <em>kg</em>'],
-      ['行星数量', '8 颗 · 轨道非等比例'],
+      ['行星数量', '8 颗 · 体积比真实'],
+      ['最近恒星', '比邻星 4.24 <em>光年</em>'],
     ],
-    note: '左右上下移动手掌 → 改变观察太阳系的视角。再次张开手掌 → 飞向地球。',
+    note: '滚轮放大时，镜头朝「视野中心最近的那颗行星」推进；张开手掌 → 进入行星选择。',
   },
   earth: {
     tag: 'HOME WORLD / 地球',
@@ -571,11 +635,67 @@ function renderHUD(key) {
     .join('');
 }
 
+
+/* ---------------- 行星资料（层级 3 / 4 的信息面板） ---------------- */
+const PLANET_INFO = [
+  { name: '水星', en: 'Mercury', r: '2,440 km', d: '0.39 AU', p: '88 天', t: '427 / -173 ℃', note: '没有大气层，昼夜温差近 600℃；表面布满撞击坑。' },
+  { name: '金星', en: 'Venus', r: '6,052 km', d: '0.72 AU', p: '225 天', t: '464 ℃', note: '浓密的二氧化碳大气与硫酸云，温室效应把它烧成了最热的行星。' },
+  { name: '地球', en: 'Earth', r: '6,371 km', d: '1.00 AU', p: '365 天', t: '15 ℃', note: '已知唯一存在液态水海洋与生命的世界，一层薄大气托住了整个生物圈。' },
+  { name: '火星', en: 'Mars', r: '3,390 km', d: '1.52 AU', p: '687 天', t: '-63 ℃', note: '氧化铁让地表发红；有太阳系最高的火山奥林帕斯山。' },
+  { name: '木星', en: 'Jupiter', r: '69,911 km', d: '5.20 AU', p: '11.9 年', t: '-145 ℃', note: '气态巨行星，大红斑是持续数百年的风暴；拥有 95 颗以上已知卫星。' },
+  { name: '土星', en: 'Saturn', r: '58,232 km', d: '9.54 AU', p: '29.5 年', t: '-178 ℃', note: '环系主要由水冰颗粒组成，厚度不到 1 公里，却宽达 28 万公里。' },
+  { name: '天王星', en: 'Uranus', r: '25,362 km', d: '19.2 AU', p: '84 年', t: '-224 ℃', note: '自转轴几乎躺倒在轨道面上，像滚球一样绕太阳走。' },
+  { name: '海王星', en: 'Neptune', r: '24,622 km', d: '30.1 AU', p: '165 年', t: '-214 ℃', note: '风速可达 2,100 km/h，是太阳系风暴最猛烈的行星。' },
+];
+
+function renderPlanetHUD(mode) {
+  const p = PLANET_INFO[st.focus] || PLANET_INFO[2];
+  hudTag.textContent = mode === 'detail' ? `LEVEL 4 / 4 · ${p.en.toUpperCase()}` : 'LEVEL 3 / 4 · 行星选择';
+  hudTitle.textContent = mode === 'detail' ? p.name : '行星选择';
+  hudSubtitle.textContent = mode === 'detail' ? `${p.en} · 太阳系第 ${st.focus + 1} 颗行星` : 'Swipe to switch · 左右滑动切换';
+  const rows = mode === 'detail'
+    ? [
+      ['赤道半径', p.r],
+      ['轨道半径', p.d],
+      ['公转周期', p.p],
+      ['表面温度', p.t],
+      ['卫星', st.focus === 0 || st.focus === 1 ? '无' : '有 · 见画面'],
+    ]
+    : [
+      ['当前行星', `${p.name} · ${p.en}`],
+      ['轨道半径', p.d],
+      ['公转周期', p.p],
+      ['切换方式', '掌心左右滑动'],
+      ['确认', '拇指 + 食指捏合'],
+      ['返回', '握拳'],
+    ];
+  hudNote.textContent = mode === 'detail' ? p.note : '捏合确认进入特写，握拳返回太阳系。';
+  hudRows.innerHTML = rows
+    .map(([k, v], i) => `<div class="row" style="animation-delay:${i * 55}ms"><span class="k">${k}</span><span class="v">${v}</span></div>`)
+    .join('');
+}
+
+let hudKey = '';
+function updateLevelHud() {
+  if (level === 'selector' || level === 'detail') {
+    // 只在「层级或选中行星变了」时重绘：每帧重写 innerHTML 会让入场动画一直重播，
+    // 结果就是列表永远停在 opacity:0 的空白状态
+    const k = `${level}:${st.focus}`;
+    if (k !== hudKey) { hudKey = k; renderPlanetHUD(level); }
+  } else {
+    renderHUD(level === 'galaxy' ? 'galaxy' : 'solar');
+  }
+}
+
 function updateHUD(key) {
   if (hudTimer) clearTimeout(hudTimer);
   hudEl.classList.add('out');
   hudTimer = setTimeout(() => {
-    renderHUD(key);
+    if (level === 'selector' || level === 'detail') {
+      // 交给 updateLevelHud 的缓存判断，避免每 220ms 重播一次行入场动画
+      const k = `${level}:${st.focus}`;
+      if (k !== hudKey) { hudKey = k; renderPlanetHUD(level); }
+    } else renderHUD(key);
     hudEl.classList.remove('out');
   }, 220);
 }
@@ -589,6 +709,7 @@ let lastX = 0, lastY = 0;
 const panPending = { x: 0, y: 0 };
 
 canvas.addEventListener('pointerdown', (e) => {
+  if (T.active || F.active) return;
   mouseDown = true;
   lastX = e.clientX; lastY = e.clientY;
   canvas.setPointerCapture(e.pointerId);
@@ -598,34 +719,269 @@ canvas.addEventListener('pointerup', (e) => {
   try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (!mouseDown || T.active) return;
+  if (!mouseDown || T.active || F.active) return;
   const dx = e.clientX - lastX;
   const dy = e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
   // 不直接改视角，先塞进「待消费队列」，由主循环按指数衰减摊到几帧里 —— 拖拽才有惯性
-  panPending.x -= dx * 0.0042;
-  panPending.y += dy * 0.0032;
+  if (level === 'detail') {
+    // 特写：拖拽转的是行星本体，不是相机
+    st.detailYaw = (st.detailYaw || 0) - dx * 0.0062;
+    st.detailPitch = clamp((st.detailPitch || 0) + dy * 0.0052, -1.5, 1.5);
+  } else {
+    panPending.x -= dx * 0.0042;
+    panPending.y += dy * 0.0032;
+  }
 });
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  if (T.active) return;
+  if (T.active || F.active) return;   // 动画锁：过渡期间不接受鼠标缩放
+  const zoomIn = e.deltaY < 0;
   dollyTarget = clamp(dollyTarget - e.deltaY * 0.00065, 0, 1);
+  if (level === 'solar') {
+    // 放大时对焦「视线中心方向 + 离镜头最近」的行星；没对准任何行星就只拉近
+    if (zoomIn) {
+      const idx = SCENES.solar.nearestInView ? SCENES.solar.nearestInView() : -1;
+      if (idx >= 0) st.track = idx;
+    } else if (dollyTarget < 0.10) {
+      st.track = -1;                  // 拉远到全景就放开跟随，回到自由观察
+    }
+  }
 }, { passive: false });
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === '1') jumpTo('galaxy');
-  if (e.key === '2') jumpTo('solar');
-  if (e.key === '3') jumpTo('earth');
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === '1') navTo('galaxy');
+  if (e.key === '2' && level === 'galaxy') beginTransition('solar');
+  if (e.key === '3') navTo('selector');
+  if (e.key === '4') navTo('detail');
+  if (e.key === 'ArrowLeft' && level === 'selector') switchPlanet(-1);
+  if (e.key === 'ArrowRight' && level === 'selector') switchPlanet(1);
+  if (e.key === 'Backspace' || e.key === 'Escape') {
+    e.preventDefault();
+    if (level === 'detail') beginFocus('fromDetail');
+    else if (level === 'selector') beginFocus('fromSelector');
+    else if (level === 'solar') beginTransition('galaxy');
+  }
 });
 
-function jumpTo(key) {
-  if (T.active || key === currentKey) return;
-  beginTransition(key);
+const PLANET_NAMES = ['水星', '金星', '地球', '火星', '木星', '土星', '天王星', '海王星'];
+const easeCine = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+
+function planetWorldPos(i, out) {
+  const sc = SCENES.solar;
+  if (!sc || !sc.planetPos) return out.set(0, 0, 0);
+  return sc.planetPos(i, out);
 }
 
+// 找离相机最近的那颗行星：进入选择页时从它开始
+function nearestPlanet() {
+  // 优先「视线中心那颗」；没有明确目标时保留当前选中，不再退回水星
+  if (SCENES.solar.nearestInView) {
+    const idx = SCENES.solar.nearestInView();
+    if (idx >= 0) return idx;
+  }
+  return typeof st.focus === 'number' && st.focus >= 0 ? st.focus : 2;
+}
+
+function beginFocus(kind) {
+  if (F.active || T.active) return;
+  const cur = { focusAmt: st.focusAmt, detailAmt: st.detailAmt };
+  F.active = true;
+  F.t = 0;
+  F.switchOnly = false;
+  F.a = cur;
+  if (kind === 'toSelector') {
+    st.focus = nearestPlanet();
+    st.focusPrev = st.focus;
+    st.focusBlend = 1;
+    st.detailAmt = 0;
+    F.dur = 3.0;
+    F.b = { focusAmt: 1, detailAmt: 0 };
+    F.done = 'selector';
+    F.label = '锁定行星 · 选择';
+  } else if (kind === 'toDetail') {
+    F.dur = 2.2;
+    F.b = { focusAmt: 1, detailAmt: 1 };
+    F.done = 'detail';
+    F.label = `抵近观测 · ${PLANET_NAMES[st.focus]}`;
+  } else if (kind === 'fromDetail') {
+    F.dur = 1.8;
+    F.b = { focusAmt: 1, detailAmt: 0 };
+    F.done = 'selector';
+    F.label = '返回 · 行星选择';
+  } else if (kind === 'fromSelector') {
+    F.dur = 2.4;
+    F.b = { focusAmt: 0, detailAmt: 0 };
+    F.done = 'solar';
+    F.label = '退出 · 太阳系';
+  }
+  document.body.classList.add('cinema', 'is-busy');
+  warpLabel.textContent = F.label;
+  warpLabel.classList.add('show');
+  warpLabel.style.opacity = '1';
+  audio.transition('warp', F.dur, 0.5);
+}
+
+// 左右切换：镜头沿弧线从一颗行星绕到隔壁那颗
+function jumpPlanet(i) {
+  if (F.active || T.active) return;
+  if (level !== 'selector') return;
+  if (i === st.focus) return;
+  st.focusPrev = st.focus;
+  st.focus = (i + 8) % 8;
+  st.focusBlend = 0;
+  F.active = true;
+  F.t = 0;
+  F.dur = 1.45;
+  F.a = { focusAmt: 1, detailAmt: 0 };
+  F.b = { focusAmt: 1, detailAmt: 0 };
+  F.switchOnly = true;
+  F.done = null;
+  F.label = PLANET_NAMES[st.focus];
+  warpLabel.textContent = F.label;
+  warpLabel.classList.add('show');
+  warpLabel.style.opacity = '1';
+  syncPlanetNav();
+  if (typeof syncBloom === 'function' && SCENES[currentKey]) syncBloom(currentKey);
+}
+
+function switchPlanet(dir) {
+  if (level !== 'selector') return;
+  jumpPlanet((st.focus + dir + 8) % 8);
+}
+
+function setLevel(next) {
+  if (!LEVELS.includes(next)) return;
+  level = next;
+  levelIndex = LEVELS.indexOf(next);
+  document.body.dataset.level = next;
+  // 直接落到特写（含 URL 参数）时把 detailAmt 补满，行星姿态转动才会生效
+  if (next === 'detail') st.detailAmt = 1;
+  else if (next === 'selector') st.detailAmt = 0;
+  if (typeof syncNav === 'function') syncNav();
+  if (typeof syncPlanetNav === 'function') syncPlanetNav();
+  // 层级决定后处理开销：只有行星特写重新打开 Bloom
+  if (typeof syncBloom === 'function' && SCENES[currentKey]) syncBloom(currentKey);
+
+  // 手势条按层级换文案
+  const gText = document.getElementById('gesture-text');
+  const gSub = document.getElementById('gesture-sub');
+  const HINT = {
+    galaxy: ['张开手掌 = 穿越猎户臂', '握拳 = 停留 · 左右移动手掌 = 转动视角'],
+    solar: ['张开手掌 = 进入行星选择', '握拳 = 返回银河系 · 手掌移动 = 转视角'],
+    selector: ['左右滑动 = 切换行星', '捏合 = 进入特写 · 握拳 = 返回太阳系'],
+    detail: ['握拳 = 返回行星选择', '手掌移动 = 环绕观察 · 滚轮 = 远近'],
+  };
+  const h = HINT[next] || HINT.galaxy;
+  if (gText) gText.textContent = h[0];
+  if (gSub) gSub.textContent = h[1];
+  if (next === 'selector' || next === 'detail') {
+    if (typeof renderPlanetHUD === 'function') renderPlanetHUD(next);
+  }
+}
+
+// 固定层级：只允许相邻层级互相跳，越级点击一律无响应
+const NAV_ALLOWED = {
+  galaxy: ['solar'],
+  solar: ['galaxy', 'selector'],
+  selector: ['solar', 'detail'],
+  detail: ['selector'],
+};
+
+// 鼠标点标签：允许跨层级直接跳，且不播逐级过渡动画（手势才受「只能走一层」约束）
+function jumpToLevel(target) {
+  if (!LEVELS.includes(target)) return;
+  // 先干净地中断任何进行中的动画，避免跳转后残留遮罩
+  T.active = false; T.t = 0;
+  F.active = false; F.t = 0;
+  warpMat.uniforms.uT.value = 0;
+  tunnelMat.uniforms.uA.value = 0;
+  veilMat.opacity = 0;
+  flashMat.opacity = 0;
+  document.body.classList.remove('cinema', 'is-busy');
+  warpLabel.style.opacity = '';
+  if (warpLabel) warpLabel.textContent = '';
+
+  const sceneKey = target === 'galaxy' ? 'galaxy' : 'solar';
+  applyScene(sceneKey);
+
+  st.dive = 0;
+  st.earthOut = 0;
+  st.galaxyDive = 0;
+  st.nebFade = 0;
+  st.clean = 0;
+  st.sunReveal = 1;
+  st.track = -1;
+  if (target === 'galaxy') {
+    st.intro = 1;
+    st.dolly = 0;
+  } else {
+    st.solarArrive = 1;
+    st.detailYaw = 0;
+    st.detailPitch = 0;
+    st.focusAmt = target === 'selector' || target === 'detail' ? 1 : 0;
+    st.detailAmt = target === 'detail' ? 1 : 0;
+    st.focusBlend = 1;
+    st.focusPrev = st.focus;
+    if (target === 'selector' || target === 'detail') st.dolly = 0.55;
+    else st.dolly = 0;
+  }
+  setLevel(target);
+  if (typeof audio !== 'undefined' && audio && audio.setScene) audio.setScene(sceneKey);
+}
+
+function navTo(target) {
+  jumpToLevel(target);
+}
+
+function jumpTo(key) { navTo(key); }
+
 document.querySelectorAll('.scene-nav .nav-btn').forEach((el) => {
-  el.addEventListener('click', () => jumpTo(el.dataset.scene));
+  el.addEventListener('click', () => navTo(el.dataset.goto));
 });
+
+
+/* ---------- 层级 3：行星缩略导航（鼠标备选，状态与手势共用 st.focus） ---------- */
+const PNAV_COLORS = ['#b9b0a4', '#e0c48a', '#4f8fd0', '#c1683f', '#d8b98a', '#e2cf9d', '#9fe0e8', '#6c8fe0'];
+const PNAV_KEY = ['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'];
+let planetNavEls = [];
+
+function buildPlanetNav() {
+  const host = document.getElementById('planet-nav');
+  if (!host) return;
+  host.innerHTML = '';
+  planetNavEls = PNAV_KEY.map((key, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pnav-btn';
+    b.dataset.index = String(i);
+    b.style.color = PNAV_COLORS[i];
+    b.innerHTML = `<span class="dot"></span><span class="cn">${PLANET_INFO[i].name}</span>`;
+    b.addEventListener('click', () => jumpPlanet(i));
+    host.appendChild(b);
+    return b;
+  });
+  syncPlanetNav();
+}
+
+function syncPlanetNav() {
+  planetNavEls.forEach((el, i) => {
+    const on = i === st.focus;
+    el.classList.toggle('is-active', on);
+    el.style.color = on ? '#eaf6ff' : PNAV_COLORS[i];
+  });
+}
+
+/* 底部导航高亮：按当前层级，而不是按场景 */
+function syncNav() {
+  document.querySelectorAll('.scene-nav .nav-btn').forEach((el) => {
+    const on = el.dataset.goto === level;
+    el.classList.toggle('is-active', on);
+    if (on) el.setAttribute('aria-current', 'true');
+    else el.removeAttribute('aria-current');
+  });
+}
 
 /* =========================================================
    手势
@@ -666,10 +1022,54 @@ async function startCamera() {
   }
 }
 
+let holdG = null;
+let holdT = 0;
+let swipeAcc = 0;
+const swipe = { active: false, x0: 0, y0: 0, t0: 0 };
+let hintT = 0;
+
+// 手势防抖：同一个手势必须稳定保持 0.30s 才生效，生效后必须松手才可能再次触发
+function consumeHold(g, dt) {
+  if (!G.present || G.gesture !== g) {
+    if (holdG === g) { holdG = null; holdT = 0; }
+    return false;
+  }
+  if (holdG !== g) { holdG = g; holdT = 0; }
+  holdT += dt;
+  if (holdT >= 0.30) {
+    holdT = -1e6; // 锁死，直到手势变化
+    return true;
+  }
+  return false;
+}
+
+function homeHint() {
+  if (hintT > 0) return;
+  hintT = 2.4;
+  warpLabel.textContent = '已在层级 1 · 银河系';
+  warpLabel.classList.add('show');
+  warpLabel.style.opacity = '1';
+}
+
+let simSwipe = null;   // 调试：脚本化的一次手掌滑动
+function feedSimSwipe(dt) {
+  simSwipe.t += 1 / 7;   // 按帧推进，无头低帧率下也能走完
+  const p = Math.min(1, simSwipe.t / 0.42);
+  G.present = true;
+  G.gesture = 'open';
+  G.openness = 1;
+  G.palm = { x: 0.5 + simSwipe.dir * 0.28 * p, y: 0.5 };
+  if (p >= 1) simSwipe = null;
+}
+
 function readGestures(dt) {
-  if (mouseMode) return;
-  tracker.update(performance.now());
-  if (T.active) return;
+  if (mouseMode && !simSwipe) { swipeAcc *= 0.9; return; }
+  if (simSwipe) feedSimSwipe(dt);
+  else tracker.update(performance.now());
+  if (hintT > 0) hintT -= dt;
+
+  // 转场期间只保留基础视角旋转，所有跳转手势锁定
+  const locked = T.active || F.active;
 
   if (G.present) {
     // 手部关键点本身有 2–3px 抖动，先低通再算位移，否则画面会「呼吸」
@@ -678,24 +1078,85 @@ function readGestures(dt) {
     palmSmooth.y += (G.palm.y - palmSmooth.y) * 0.34;
 
     // ---- 平移（带死区，避免手抖导致画面乱转）----
+    let dx = 0;
+    let dy = 0;
     if (prevHand) {
-      const dx = palmSmooth.x - prevHand.x;
-      const dy = palmSmooth.y - prevHand.y;
-      if (Math.abs(dx) > 0.0016) panPending.x += dx * 6.4;
-      if (Math.abs(dy) > 0.0016) panPending.y += dy * 5.0;
+      dx = palmSmooth.x - prevHand.x;
+      dy = palmSmooth.y - prevHand.y;
+      if (level === 'detail') {
+        // 特写：手掌位移直接转动行星本体（相机不动）
+        if (Math.abs(dx) > 0.0012) st.detailYaw = (st.detailYaw || 0) + dx * 7.2;
+        if (Math.abs(dy) > 0.0012) {
+          st.detailPitch = clamp((st.detailPitch || 0) + dy * 5.6, -1.5, 1.5);
+        }
+      } else {
+        if (Math.abs(dx) > 0.0016) panPending.x += dx * 6.4;
+        if (Math.abs(dy) > 0.0016) panPending.y += dy * 5.0;
+      }
     }
     prevHand = { x: palmSmooth.x, y: palmSmooth.y };
 
-    // ---- 缩放 ----
-    if (G.gesture === 'open') {
-      const strength = clamp((G.openness - 0.6) / 0.4, 0.35, 1);
-      dollyTarget = clamp(dollyTarget + dt * 0.62 * strength, 0, 1);
-    } else if (G.gesture === 'fist') {
-      dollyTarget = clamp(dollyTarget - dt * 0.62, 0, 1);
+    if (locked) { swipeAcc = 0; return; }
+
+    // ---- 层级 3：滑动切行星 ----
+    // 规格：手掌全程完全张开；水平位移 ≥ 画面宽 12%；垂直偏移 < 5%；
+    // 匀速平移时长 ≥ 0.25s。不套 0.3s 延时（那是给捏合/握拳的）。
+    if (level === 'selector' && !locked) {
+      if (G.gesture === 'open') {
+        const nowS = performance.now() * 0.001;
+        if (!swipe.active) {
+          swipe.active = true;
+          swipe.x0 = palmSmooth.x;
+          swipe.y0 = palmSmooth.y;
+          swipe.t0 = nowS;
+        } else {
+          const dxs = palmSmooth.x - swipe.x0;
+          const dys = palmSmooth.y - swipe.y0;
+          const dur = nowS - swipe.t0;
+          // 滑动意图明确时压住视角旋转，避免一边切行星一边转场景
+          if (Math.abs(dxs) > 0.03) panPending.x *= 0.55;
+          if (Math.abs(dxs) > 0.12 && Math.abs(dys) < 0.05 && dur >= 0.25) {
+            if (dxs < 0) switchPlanet(-1);   // 向左滑 = 上一颗
+            else switchPlanet(1);            // 向右滑 = 下一颗
+            swipe.active = false;
+          } else if (dur > 1.8) {
+            swipe.active = false;
+          }
+        }
+      } else {
+        swipe.active = false;
+      }
+    } else {
+      swipe.active = false;
+    }
+
+    // ---- 各层级手势 ----
+    if (level === 'galaxy') {
+      if (consumeHold('open', dt)) beginTransition('solar');
+      else if (consumeHold('fist', dt)) homeHint();
+    } else if (level === 'solar') {
+      if (consumeHold('open', dt)) beginFocus('toSelector');
+      else if (consumeHold('fist', dt)) beginTransition('galaxy');
+    } else if (level === 'selector') {
+      if (consumeHold('pinch', dt)) beginFocus('toDetail');
+      else if (consumeHold('fist', dt)) beginFocus('fromSelector');
+    } else if (level === 'detail') {
+      if (consumeHold('fist', dt)) beginFocus('fromDetail');
+    }
+
+    // ---- 层级 1 / 2 保留手掌深度推拉（当作缩放手感）----
+    if (level === 'galaxy' || level === 'solar') {
+      if (G.gesture === 'open') {
+        const strength = clamp((G.openness - 0.6) / 0.4, 0.35, 1);
+        dollyTarget = clamp(dollyTarget + dt * 0.62 * strength, 0, 1);
+      } else if (G.gesture === 'fist') {
+        dollyTarget = clamp(dollyTarget - dt * 0.62, 0, 1);
+      }
     }
   } else {
     prevHand = null;
     palmSmooth = null;
+    swipeAcc = 0;
   }
 }
 
@@ -708,74 +1169,93 @@ const gestureText = document.getElementById('gesture-text');
 /* ---------- 邻近星系的名字标签（HTML 投影，比 Sprite 文字更清晰） ---------- */
 const labelsEl = document.getElementById('labels');
 let labelEls = null;
+const labelSets = { galaxy: [], solar: [] };
 const labelVec = new THREE.Vector3();
+
+function makeLabelEl(a) {
+  const el = document.createElement('div');
+  el.className = 'clabel';
+  const b = document.createElement('b');
+  b.textContent = a.text;
+  const i = document.createElement('i');
+  i.textContent = a.sub || '';
+  el.append(b, i);
+  if (a.small) el.classList.add('clabel-sm');
+  labelsEl.appendChild(el);
+  return el;
+}
 
 function buildLabels() {
   if (!labelsEl) return;
-  const anchors = SCENES.galaxy.anchors || [];
   labelsEl.innerHTML = '';
-  labelEls = anchors.map((a) => {
-    const el = document.createElement('div');
-    el.className = 'clabel';
-    const b = document.createElement('b');
-    b.textContent = a.text;
-    const i = document.createElement('i');
-    i.textContent = a.sub;
-    el.append(b, i);
-    labelsEl.appendChild(el);
-    return el;
+  ['galaxy', 'solar'].forEach((key) => {
+    const anchors = (SCENES[key] && SCENES[key].anchors) || [];
+    labelSets[key] = anchors.map(makeLabelEl);
   });
+  labelEls = labelSets.galaxy;
 }
 
 function updateLabels() {
-  if (!labelEls || !labelEls.length) return;
-  const show = currentKey === 'galaxy' && !T.active;
-  const anchors = SCENES.galaxy.anchors;
-  const cam = SCENES.galaxy.camera;
+  if (!labelEls) return;
   const w = window.innerWidth;
   const h = window.innerHeight;
-  for (let i = 0; i < labelEls.length; i++) {
-    const el = labelEls[i];
-    const a = anchors[i];
-    if (!show || st.intro < 0.985) {
-      if (el._op !== 0) { el.style.opacity = 0; el._op = 0; }
-      continue;
+  const introOk = currentKey !== 'galaxy' || st.intro >= 0.985;
+
+  for (const key of ['galaxy', 'solar']) {
+    const anchors = (SCENES[key] && SCENES[key].anchors) || [];
+    const els = labelSets[key];
+    const cam = SCENES[key].camera;
+    const show = currentKey === key && !T.active && introOk;
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      const a = anchors[i];
+      if (!a || !show) {
+        if (el._op !== 0) { el.style.opacity = 0; el._op = 0; }
+        continue;
+      }
+      labelVec.copy(a.pos).project(cam);
+      if (labelVec.z > 1) {
+        if (el._op !== 0) { el.style.opacity = 0; el._op = 0; }
+        continue;
+      }
+      const x = (labelVec.x * 0.5 + 0.5) * w;
+      const y = (-labelVec.y * 0.5 + 0.5) * h;
+      const fadeX = 1 - smoothstep(0.84, 0.99, Math.abs(labelVec.x));
+      const fadeY = 1 - smoothstep(0.84, 0.99, Math.abs(labelVec.y));
+      const op = Math.round(fadeX * fadeY * (a.alpha == null ? 1 : a.alpha) * 100) / 100;
+      // 只在真的挪动/变淡时写样式，省掉每帧一次样式重算
+      const tf = `translate(-50%,-100%) translate(${x.toFixed(1)}px,${(y - 12).toFixed(1)}px)`;
+      if (el._tf !== tf) { el.style.transform = tf; el._tf = tf; }
+      if (el._op !== op) { el.style.opacity = op; el._op = op; }
     }
-    labelVec.copy(a.pos).project(cam);
-    if (labelVec.z > 1) {
-      if (el._op !== 0) { el.style.opacity = 0; el._op = 0; }
-      continue;
-    }
-    const x = (labelVec.x * 0.5 + 0.5) * w;
-    const y = (-labelVec.y * 0.5 + 0.5) * h;
-    const fadeX = 1 - smoothstep(0.84, 0.99, Math.abs(labelVec.x));
-    const fadeY = 1 - smoothstep(0.84, 0.99, Math.abs(labelVec.y));
-    const op = Math.round(fadeX * fadeY * 100) / 100;
-    // 只在真的挪动/变淡时写样式，省掉每帧一次样式重算
-    const tf = `translate(-50%,-100%) translate(${x.toFixed(1)}px,${(y - 12).toFixed(1)}px)`;
-    if (el._tf !== tf) { el.style.transform = tf; el._tf = tf; }
-    if (el._op !== op) { el.style.opacity = op; el._op = op; }
   }
 }
 
 const GESTURE_HINT = {
-  galaxy: ['张开手掌 = 放大推进', '握拳 = 缩小 · 移动手掌 = 左右转动'],
-  solar: ['张开手掌 = 飞向地球', '移动手掌 = 改变观察角度'],
-  earth: ['移动手掌 = 转动地球', '握拳 = 缩小返回银河系'],
+  galaxy: ['张开手掌 = 进入太阳系', '握拳 = 停留 · 移动手掌 = 转动视角'],
+  solar: ['左右上下移动手掌 = 改变观察太阳系的视角', '张开手掌 = 飞向行星选择 · 握拳 = 返回银河系'],
+  selector: ['左右滑动 = 切换行星', '捏合 = 进入特写 · 握拳 = 返回太阳系'],
+  detail: ['握拳 = 返回行星选择', '鼠标拖拽 = 旋转行星 · 滚轮 = 缩放'],
 };
 
 /* =========================================================
    主循环
    ========================================================= */
 let lastFrameMs = performance.now();
+let fpsAcc = 0; let fpsN = 0; let fpsNow = 0;
 let lodAcc = 0;
 let lodN = 0;
 let lodHold = 0;
 let uiAcc = 0;
+let prevYaw = 0;
+let rollNow = 0;
 
 function tick() {
   requestAnimationFrame(tick);
   const rawMs = performance.now() - lastFrameMs;
+  // 轻量帧率计：只做一次加法，不影响渲染
+  fpsAcc += rawMs; fpsN += 1;
+  if (fpsAcc >= 500) { fpsNow = (fpsN * 1000) / fpsAcc; fpsAcc = 0; fpsN = 0; }
   lastFrameMs = performance.now();
   const dt = Math.min(clock.getDelta(), 0.05);
 
@@ -790,8 +1270,8 @@ function tick() {
     const ay = panPending.y * kp;
     st.yaw += ax;
     panPending.x -= ax;
-    // 地球要能 360° 翻，其它场景限制俯仰别翻过头
-    const lim = currentKey === 'earth' ? Infinity : 1.15;
+    // 地球要能 360° 翻；银河与太阳系也放开到大半个球，转起来更有纵深
+    const lim = currentKey === 'earth' ? Infinity : 1.42;
     st.pitch = clamp(st.pitch + ay, -lim, lim);
     panPending.y -= ay;
     if (Math.abs(panPending.x) < 1e-4) panPending.x = 0;
@@ -801,6 +1281,27 @@ function tick() {
   }
 
   /* --------- 过渡推进 --------- */
+  /* --------- 层级内镜头动画（选择 / 特写 / 切换行星） --------- */
+  if (F.active) {
+    F.t = Math.min(1, F.t + dt / F.dur);
+    const e = easeCine(F.t);
+    if (F.switchOnly) {
+      st.focusBlend = e;
+      if (F.t >= 1) { F.active = false; warpLabel.classList.remove('show'); updateLevelHud(); }
+    } else {
+      st.focusAmt = lerp(F.a.focusAmt, F.b.focusAmt, e);
+      st.detailAmt = lerp(F.a.detailAmt, F.b.detailAmt, e);
+      if (F.t >= 1) {
+        F.active = false;
+        document.body.classList.remove('cinema', 'is-busy');
+        warpLabel.classList.remove('show');
+        warpLabel.style.opacity = '';
+        if (F.done) setLevel(F.done);
+        updateLevelHud();
+      }
+    }
+  }
+
   if (T.active) {
     T.t += dt / T.dur;
     const tt = Math.min(T.t, 1);
@@ -811,7 +1312,8 @@ function tick() {
       /* 太阳系 → 地球：前 2.6 秒镜头一路俯冲到地球表面，随后切到地球场景再缓缓拉开 */
       const A = T.swapAt;
       if (tt < A) {
-        st.dive = easeIO(tt / A);
+        // 先快后慢：一开始地球在远处迅速变大，占据画面后明显减速
+        st.dive = 1 - Math.pow(1 - tt / A, 2.6);
         // 贴近太阳时压一点辉光，避免整屏过曝
         bloom.strength = BLOOM.solar.strength * (1 - 0.32 * st.dive);
         veilMat.opacity = 0;
@@ -835,31 +1337,52 @@ function tick() {
         bloom.strength = lerp(BLOOM.solar.strength, BLOOM.earth.strength, settle);
         bloom.radius = lerp(BLOOM.solar.radius, BLOOM.earth.radius, settle);
         bloom.threshold = lerp(BLOOM.solar.threshold, BLOOM.earth.threshold, settle);
-        st.earthArrive = lerp(0.60, 1, easeIO((tt - A) / (1 - A)));
+        st.earthArrive = lerp(0.94, 1, 1 - Math.pow(1 - (tt - A) / (1 - A), 2.2));
       }
     } else if (T.mode === 'galaxyDive') {
       /* 银河系 → 太阳系：朝猎户臂上太阳的位置一路放大冲进去，最后穿过隧道换成太阳系 */
       const A = T.swapAt;
       tunnelMat.uniforms.uT.value = tt;
       if (tt < A) {
-        const k = tt / A;
-        st.galaxyDive = easeIO(k);
-        // 越接近目标，隧道壁越亮，把「切换」藏在光里
-        tunnelMat.uniforms.uA.value = smoothstep(0.55, 1.0, k) * 0.85;
+        // 用速度积分得到的 P(tt) 驱动放大：起步慢、中段越来越快、临近目标刹车
+        const pAll = cinemaP(tt);
+        const pSwap = cinemaP(A);
+        const k = Math.min(1, pAll / Math.max(pSwap, 1e-4));
+        st.galaxyDive = k;
+        // 星云在 3–10s 之间慢慢淡出，把视野收拢成纯深空
+        st.nebFade = smoothstep(0.10, 0.62, k);
+        // 这一段是真三维的星际穿越，不再叠 2D 隧道，避免糊一层灰
+        tunnelMat.uniforms.uA.value = 0;
         veilMat.opacity = 0;
         flashMat.opacity = 0;
         warpMat.uniforms.uT.value = 0;
+        st.clean = 0;
       } else {
         if (!T.swapped) {
           T.swapped = true;
           applyScene('solar');
           st.galaxyDive = 0;
-          st.solarArrive = 0.10;
+          st.nebFade = 1;
+          // 先停在远处：太阳此时还不可见，只有行星与星空
+          st.solarArrive = 1.55;
+          st.sunReveal = 0;
+          st.earthReveal = 0;
         }
         const k = (tt - A) / (1 - A);
-        st.solarArrive = lerp(0.10, 1, easeIO(Math.pow(k, 0.72)));
-        tunnelMat.uniforms.uA.value = (1 - Math.min(1, k * 3.4)) * 0.85;
-        flashMat.opacity = 0.42 * Math.exp(-Math.pow(((tt - A) * T.dur) / 0.13, 2));
+        // 13–15s：减速收尾，镜头几乎停住，让八大行星完整呈现在画面里
+        st.solarArrive = lerp(1.55, 1, 1 - Math.pow(1 - k, 2.2));
+        // 只剩最后 0.5 秒时太阳才点亮：由小到大、由暗到亮
+        const remain = (1 - tt) * T.dur;
+        // 太阳：从「几乎没有」一路长到最后，不是等到末尾才点亮
+        const rv = clamp(k, 0, 1);
+        st.sunReveal = rv * rv * (3 - 2 * rv);
+        // 地球的「亮起来」更晚一步：只留最后 0.15 秒
+        const rvE = clamp(1 - remain / 0.15, 0, 1);
+        st.earthReveal = rvE * rvE * (3 - 2 * rvE);
+        st.clean = smoothstep(0.15, 0.85, k);
+        tunnelMat.uniforms.uA.value = 0;
+        // 切镜那一瞬用极短的一次「抵达闪光」盖住尺度跳变 —— 不是整段白闪
+        flashMat.opacity = 0.34 * Math.exp(-Math.pow(((tt - A) * T.dur) / 0.11, 2));
       }
     } else if (T.mode === 'emerge') {
       /* 地球 → 银河系：地球先缩成一个亮点，再从那个点里把整片银河长出来 */
@@ -979,6 +1502,7 @@ function tick() {
 
     if (T.t >= 1) {
       T.active = false;
+      document.body.classList.remove('cinema');
       cooldown = 0.9;
       document.body.classList.remove('is-busy');
       warpLabel.classList.remove('show');
@@ -996,10 +1520,8 @@ function tick() {
     }
   } else {
     /* --------- 缩放阈值触发转场 --------- */
-    if (cooldown <= 0) {
-      if (currentKey === 'galaxy' && st.dolly >= 0.995) beginTransition('solar');
-      else if (currentKey === 'solar' && st.dolly >= 0.995) beginTransition('earth');
-      else if (currentKey === 'earth' && st.dolly <= 0.005) beginTransition('galaxy');
+    if (cooldown <= 0 && level === 'galaxy' && st.dolly >= 0.995) {
+      beginTransition('solar');
     }
   }
 
@@ -1019,6 +1541,19 @@ function tick() {
   }
 
   /* --------- 场景更新与渲染 --------- */
+  /* 侧向扫视时给相机一点滚转（banking），画面不再是「平面平移」，
+     而像真的绕着天体飞。滚转量取 yaw 的角速度，很小，只负责纵深感。 */
+  const dyaw = st.yaw - prevYaw;
+  prevYaw = st.yaw;
+  const rollT = clamp((-dyaw / Math.max(dt, 0.001)) * 0.010, -0.075, 0.075);
+  rollNow += (rollT - rollNow) * (1 - Math.exp(-dt / 0.16));
+  const camNow = active.camera;
+  if (Math.abs(rollNow) > 1e-4) {
+    camNow.up.set(Math.sin(rollNow), Math.cos(rollNow), 0);
+  } else if (camNow.up.y !== 1) {
+    camNow.up.set(0, 1, 0);
+  }
+
   active.update(dt, st);
   // 靠近主体时压低泛光，避免整屏发白（各场景可自报系数）
   if (!T.active && active.bloomScale) {
@@ -1046,7 +1581,10 @@ function tick() {
     const pct = currentKey === 'earth' ? (st.dolly / 0.55) * 100 : st.dolly * 100;
     zoomFill.style.width = `${clamp(pct, 0, 100)}%`;
 
-    if (!G.present && !mouseMode && !T.active) {
+    // 层级 3/4 由 setLevel 写死文案，这里不要再覆盖
+    if (level === 'selector' || level === 'detail') {
+      /* keep */
+    } else if (!G.present && !mouseMode && !T.active) {
       gestureText.textContent = '等待手部进入画面…';
     } else if (!mouseMode) {
       gestureText.textContent =
@@ -1109,6 +1647,7 @@ function boot() {
   renderHUD('galaxy');
   applyScene('galaxy');
   buildLabels();
+  buildPlanetNav();
   warmUp();
   tick();
 }
@@ -1130,8 +1669,30 @@ function warmUp() {
 
 // URL 调试：?scene=solar / earth（在 boot() 之后同步切，避免和首帧抢时序）
 function applySceneFromURL() {
-  const q = new URLSearchParams(location.search).get('scene');
+  const sp = new URLSearchParams(location.search);
+  const q = sp.get('scene');
   if (q && SCENES[q] && q !== 'galaxy') applyScene(q);
+  // 调试：直接落到某个层级
+  // 调试：直接给定进场进度（模拟银河→太阳系转场中途的太阳）
+  const ar = parseFloat(sp.get('arrive') || '');
+  if (!Number.isNaN(ar)) st.solarArrive = clamp(ar, 0, 1);
+  // 调试：脚本化一次左/右滑动，用来验证层级 3 的滑动判定
+  if (sp.get('simswipe')) {
+    const dir = sp.get('simswipe') === 'right' ? 1 : -1;
+    setTimeout(() => { simSwipe = { t: 0, dir }; }, 1500);
+  }
+  // 调试：自动跑一次「太阳系 → 行星选择」动画，验证链路
+  if (sp.get('flow') === 'selector') setTimeout(() => beginFocus('toSelector'), 1200);
+  const lv = sp.get('level');
+  if (lv && ['selector', 'detail'].includes(lv)) {
+    const f = clamp(parseInt(sp.get('focus') || '4', 10) || 0, 0, 7);
+    st.focus = f;
+    st.focusPrev = f;
+    st.focusBlend = 1;
+    st.focusAmt = 1;
+    st.detailAmt = lv === 'detail' ? 1 : 0;
+    setLevel(lv);
+  }
 }
 
 enterBtn.addEventListener('click', () => {
@@ -1159,7 +1720,9 @@ if (PARAMS.has('auto')) {
 }
 
 // 调试/自动化钩子
-window.U = {
+try { window.U = {
+  renderer, composer, bloom,
+  get fps() { return fpsNow; },
   SCENES,
   st,
   T,
@@ -1168,8 +1731,13 @@ window.U = {
   beginIntro,
   audio,
   tracker,
+  beginFocus,
+  switchPlanet,
+  setLevel,
+  get level() { return level; },
+  get focusIdx() { return st.focus; },
   get key() { return currentKey; },
   get tunnelA() { return tunnelMat.uniforms.uA.value; },
   get tunnelT() { return tunnelMat.uniforms.uT.value; },
   get active() { return active; },
-};
+}; } catch (err) { console.error('U init failed:', err && err.message); }

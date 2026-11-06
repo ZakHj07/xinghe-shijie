@@ -30,6 +30,7 @@ const SURFACE_FRAG = /* glsl */ `
   uniform sampler2D uWater;
   uniform vec3 uSunDir;
   uniform float uNightGain;
+  uniform float uReveal;
   varying vec2 vUv;
   varying vec3 vN;
   varying vec3 vW;
@@ -55,7 +56,7 @@ const SURFACE_FRAG = /* glsl */ `
 
     // 海面高光：很窄的一束，只在受光面出现
     vec3 H = normalize(L + V);
-    float spec = min(pow(max(dot(N, H), 0.0), 420.0) * water * 1.15 * day, 0.60);
+    float spec = min(pow(max(dot(N, H), 0.0), 620.0) * water * 0.50 * day, 0.30);
 
     // 夜面城市灯：只出现在陆地上
     vec3 lights = texture2D(uNight, vUv).rgb * vec3(1.0, 0.78, 0.52);
@@ -69,7 +70,7 @@ const SURFACE_FRAG = /* glsl */ `
     float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.6);
     col += vec3(0.30, 0.55, 1.0) * fres * (0.10 + 0.90 * day) * 0.80;
 
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(col * uReveal, 1.0);
   }
 `;
 
@@ -134,6 +135,7 @@ export function createEarthSurface({ day, night, water, radius = 1, segments = 1
     uWater: { value: water || null },
     uSunDir: { value: sunDir.clone() },
     uNightGain: { value: nightGain },
+    uReveal: { value: 1 },
   };
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(radius, segments, segments),

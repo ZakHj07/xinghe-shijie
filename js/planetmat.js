@@ -86,7 +86,10 @@ export function createPlanetMaterial({
         diff = pow(diff, 1.08);
         diff = clamp(diff + relief * 0.5 * smoothstep(0.0, 0.35, ndl), 0.0, 1.0);
 
-        vec3 col = base * (0.050 + 1.00 * diff);
+        // 夜面不压成纯黑：给一点点环境光 + 极弱的面向相机的补光，
+        // 广角里背光的行星才是一颗暗星体，而不是一块黑洞
+        float fill = 0.040 * pow(max(dot(N, normalize(cameraPosition - vW)), 0.0), 1.4);
+        vec3 col = base * (0.150 + 1.00 * diff + fill);
 
         // 晨昏线附近的暖色散射（大气把低角度阳光染红）
         col *= mix(vec3(1.0), vec3(1.12, 0.94, 0.82), smoothstep(0.40, 0.01, abs(ndl)) * 0.8);

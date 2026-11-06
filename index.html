@@ -65,15 +65,20 @@
 </div>
 
 <!-- 场景切换（可点击） -->
-<nav id="scene-nav" class="scene-nav" aria-label="场景切换">
-  <button type="button" class="nav-btn is-active" data-scene="galaxy" aria-current="true">
+<div id="planet-nav" class="planet-nav" aria-label="行星选择"></div>
+
+<nav id="scene-nav" class="scene-nav" aria-label="层级切换">
+  <button type="button" class="nav-btn is-active" data-goto="galaxy" aria-current="true">
     <span class="nav-idx">01</span><span class="nav-cn">银河系</span><span class="nav-en">MILKY WAY</span>
   </button>
-  <button type="button" class="nav-btn" data-scene="solar">
+  <button type="button" class="nav-btn" data-goto="solar">
     <span class="nav-idx">02</span><span class="nav-cn">太阳系</span><span class="nav-en">SOLAR SYSTEM</span>
   </button>
-  <button type="button" class="nav-btn" data-scene="earth">
-    <span class="nav-idx">03</span><span class="nav-cn">地球</span><span class="nav-en">EARTH</span>
+  <button type="button" class="nav-btn" data-goto="selector">
+    <span class="nav-idx">03</span><span class="nav-cn">行星选择</span><span class="nav-en">SELECT</span>
+  </button>
+  <button type="button" class="nav-btn" data-goto="detail">
+    <span class="nav-idx">04</span><span class="nav-cn">行星特写</span><span class="nav-en">DETAIL</span>
   </button>
 </nav>
 
